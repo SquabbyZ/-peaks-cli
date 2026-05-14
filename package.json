@@ -1,0 +1,39 @@
+{
+  "name": "@peaks/cli",
+  "version": "0.1.0",
+  "description": "Peaks CLI and short skill family for Claude Code automation.",
+  "type": "module",
+  "packageManager": "pnpm@10.11.0",
+  "bin": {
+    "peaks": "./bin/peaks.js"
+  },
+  "files": [
+    "bin/peaks.js",
+    "dist/src/cli/index.js",
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
+    "skills/**/SKILL.md",
+    "schemas/*.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "dev": "tsx src/cli/index.ts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.8",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
