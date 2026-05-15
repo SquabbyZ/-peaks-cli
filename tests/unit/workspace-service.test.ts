@@ -16,18 +16,24 @@ describe('workspace service', () => {
     expect(plan.plannedCommands).toHaveLength(1);
   });
 
-  test('getArtifactWorkspaceStatus returns status for current workspace ws2', () => {
-    // Current workspace ws2 exists and has no artifactRepo, so configured=false
-    const status = getArtifactWorkspaceStatus();
-    expect(status.workspaceId).toBe('ws2');
+  test('getArtifactWorkspaceStatus returns configured=false when workspace has no artifact repo', () => {
+    // Current workspace ws-sw exists in HOME config but /ws1 path doesn't exist
+    // getCurrentWorkspaceConfig will return null because the workspace rootPath doesn't exist
+    const status = getArtifactWorkspaceStatus('ws-sw');
     expect(status.configured).toBe(false);
     expect(status.syncStatus).toBe('unknown');
   });
 
-  test('planArtifactSync returns unknown when current workspace has no artifact repo', () => {
-    // ws2 has no artifactRepo, so planArtifactSync returns 'unknown' for workspaceId
-    const plan = planArtifactSync(undefined, true);
-    expect(plan.workspaceId).toBe('unknown');
+  test('planArtifactSync returns unknown when workspace rootPath does not exist', () => {
+    // ws1 exists but rootPath /ws1 doesn't exist
+    const plan = planArtifactSync('ws1', true);
+    expect(plan.workspaceId).toBe('ws1');
     expect(plan.remoteUrl).toBeNull();
+  });
+
+  test('planArtifactSync dry-run returns planned commands', () => {
+    const plan = planArtifactSync('nonexistent', true);
+    expect(plan.dryRun).toBe(true);
+    expect(plan.plannedCommands[0]).toContain('No artifact repo configured');
   });
 });

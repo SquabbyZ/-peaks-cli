@@ -173,4 +173,156 @@ describe('createProgram', () => {
     expect(serializedData).toContain('everything-claude-code.code-review-agent');
     expect(serializedData).toContain('"sources":[{"sourceId":"everything-claude-code"');
   });
+
+  test('prints config get as JSON envelope', async () => {
+    const result = await runCommand(['config', 'get', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('config.get');
+  });
+
+  test('prints config get with specific key', async () => {
+    const result = await runCommand(['config', 'get', '--key', 'language', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('config.get');
+  });
+
+  test('prints config set value', async () => {
+    const result = await runCommand(['config', 'set', '--key', 'language', '--value', '"zh"', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('config.set');
+  });
+
+  test('config set rejects invalid JSON value', async () => {
+    const result = await runCommand(['config', 'set', '--key', 'language', '--value', 'not-json', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_JSON');
+  });
+
+  test('prints config workspace list', async () => {
+    const result = await runCommand(['config', 'workspace', 'list', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('config.workspace.list');
+  });
+
+  test('adds and removes workspace', async () => {
+    const addResult = await runCommand(['config', 'workspace', 'add', '--id', 'test-add-ws', '--name', 'Test Add', '--path', '/tmp', '--json']);
+    expect(addResult.exitCode === undefined || addResult.exitCode === 0).toBe(true);
+    const addOutput = parseJsonOutput(addResult.stdout);
+    expect(addOutput.ok).toBe(true);
+
+    const removeResult = await runCommand(['config', 'workspace', 'remove', '--id', 'test-add-ws', '--json']);
+    const removeOutput = parseJsonOutput(removeResult.stdout);
+    expect(removeOutput.ok).toBe(true);
+  });
+
+  test('remove workspace fails for unknown workspace', async () => {
+    const result = await runCommand(['config', 'workspace', 'remove', '--id', 'nonexistent-ws', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('WORKSPACE_NOT_FOUND');
+  });
+
+  test('switch workspace fails for unknown workspace', async () => {
+    const result = await runCommand(['config', 'workspace', 'switch', '--id', 'nonexistent-ws', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('WORKSPACE_NOT_FOUND');
+  });
+
+  test('prints artifacts sync dry-run', async () => {
+    const result = await runCommand(['artifacts', 'sync', '--workspace', 'ws1', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('artifacts.sync');
+  });
+
+  test('rejects non-dry-run artifacts sync', async () => {
+    const result = await runCommand(['artifacts', 'sync', '--workspace', 'ws1', '--no-dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_NON_DRY_RUN');
+  });
+
+  test('prints artifacts workspace status', async () => {
+    const result = await runCommand(['artifacts', 'workspace', '--workspace', 'ws1', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('artifacts.workspace');
+  });
+
+  test('prints artifacts workspace status without explicit workspace', async () => {
+    const result = await runCommand(['artifacts', 'workspace', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('artifacts.workspace');
+  });
+
+  test('config workspace add with artifact repo', async () => {
+    const result = await runCommand([
+      'config', 'workspace', 'add',
+      '--id', 'test-cli-add',
+      '--name', 'Test Add with Repo',
+      '--path', '/tmp/test-cli-add',
+      '--provider', 'github',
+      '--repo-owner', 'testowner',
+      '--repo-name', 'test-repo',
+      '--json'
+    ]);
+    const output = parseJsonOutput(result.stdout);
+    expect(output.ok).toBe(true);
+
+    // cleanup
+    await runCommand(['config', 'workspace', 'remove', '--id', 'test-cli-add', '--json']);
+  });
+
+  test('config workspace add without artifact repo options', async () => {
+    const result = await runCommand([
+      'config', 'workspace', 'add',
+      '--id', 'test-cli-plain',
+      '--name', 'Test Plain Add',
+      '--path', '/tmp/test-cli-plain',
+      '--json'
+    ]);
+    const output = parseJsonOutput(result.stdout);
+    expect(output.ok).toBe(true);
+
+    // cleanup
+    await runCommand(['config', 'workspace', 'remove', '--id', 'test-cli-plain', '--json']);
+  });
+
+  test('config workspace switch to known workspace', async () => {
+    // First create a workspace
+    await runCommand([
+      'config', 'workspace', 'add',
+      '--id', 'test-switch-target',
+      '--name', 'Switch Target',
+      '--path', '/tmp/test-switch-target',
+      '--json'
+    ]);
+
+    // Now switch to it
+    const result = await runCommand(['config', 'workspace', 'switch', '--id', 'test-switch-target', '--json']);
+    const output = parseJsonOutput(result.stdout);
+    expect(output.ok).toBe(true);
+    expect(output.data.currentWorkspace).toBe('test-switch-target');
+
+    // cleanup
+    await runCommand(['config', 'workspace', 'remove', '--id', 'test-switch-target', '--json']);
+  });
 });

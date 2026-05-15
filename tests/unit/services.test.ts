@@ -52,4 +52,9 @@ describe('service skeletons', () => {
   test('refactor dry run supports rd mode', () => {
     expect(createRefactorDryRun('rd').mode).toBe('rd');
   });
+
+  test('planProxyTest rejects URLs that fail to parse', () => {
+    // A URL that is valid per startsWith check but fails URL constructor
+    expect(() => planProxyTest('http://[invalid')).toThrow('Proxy URL must be a valid URL');
+  });
 });

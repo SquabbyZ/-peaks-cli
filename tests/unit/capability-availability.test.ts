@@ -40,6 +40,44 @@ const docsLookup: CapabilityItem = {
   }
 };
 
+const cliCapability: CapabilityItem = {
+  capabilityId: 'some-cli-tool',
+  sourceId: 'some-source',
+  name: 'Some CLI Tool',
+  itemType: 'cli',
+  category: 'tooling',
+  workflows: ['code-refactor'],
+  audience: ['engineer'],
+  riskLevel: 'low',
+  fallback: {
+    mode: 'manual-execution',
+    qualityImpact: 'lower'
+  },
+  presentation: {
+    displayName: { en: 'Some CLI Tool', 'zh-CN': '某 CLI 工具' },
+    description: { en: 'A CLI tool.', 'zh-CN': '一个 CLI 工具。' }
+  }
+};
+
+const skillCapability: CapabilityItem = {
+  capabilityId: 'some-skill',
+  sourceId: 'some-source',
+  name: 'Some Skill',
+  itemType: 'skill',
+  category: 'tooling',
+  workflows: ['code-refactor'],
+  audience: ['engineer'],
+  riskLevel: 'low',
+  fallback: {
+    mode: 'manual-execution',
+    qualityImpact: 'lower'
+  },
+  presentation: {
+    displayName: { en: 'Some Skill', 'zh-CN': '某技能' },
+    description: { en: 'A skill.', 'zh-CN': '一个技能。' }
+  }
+};
+
 describe('resolveCapabilityAvailability', () => {
   test('marks locally installed capabilities as available', () => {
     const availability = resolveCapabilityAvailability([codeReviewAgent], {
@@ -71,5 +109,47 @@ describe('resolveCapabilityAvailability', () => {
       }
     });
     expect(availability[0]?.installPlan).not.toHaveProperty('commandPreview');
+  });
+
+  test('marks missing CLI capabilities as unknown status', () => {
+    const availability = resolveCapabilityAvailability([cliCapability], {
+      installedCapabilityIds: []
+    });
+
+    expect(availability[0]).toMatchObject({
+      capabilityId: 'some-cli-tool',
+      status: 'unknown',
+      type: 'cli',
+      installPlan: {
+        available: false,
+        requiresApproval: true
+      }
+    });
+  });
+
+  test('marks missing skill capabilities as installable', () => {
+    const availability = resolveCapabilityAvailability([skillCapability], {
+      installedCapabilityIds: []
+    });
+
+    expect(availability[0]).toMatchObject({
+      capabilityId: 'some-skill',
+      status: 'installable',
+      type: 'skill'
+    });
+    expect(availability[0].installPlan).toBeDefined();
+    expect(availability[0].installPlan?.available).toBe(true);
+  });
+
+  test('handles multiple items with mixed availability', () => {
+    const availability = resolveCapabilityAvailability(
+      [codeReviewAgent, docsLookup, cliCapability],
+      { installedCapabilityIds: ['everything-claude-code.code-review-agent'] }
+    );
+
+    expect(availability).toHaveLength(3);
+    expect(availability[0].status).toBe('available');
+    expect(availability[1].status).toBe('installable');
+    expect(availability[2].status).toBe('unknown');
   });
 });
