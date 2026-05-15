@@ -4,8 +4,6 @@ import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
 import { pathsEqual } from '../../src/shared/path-utils.js';
-import { isWindows } from '../../src/shared/platform.js';
-import { createSymlinkSync } from '../../src/shared/fs-utils.js';
 
 let currentWorkspace: WorkspaceConfig | null = null;
 

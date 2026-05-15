@@ -1,11 +1,10 @@
-import { mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
-import { pathsEqual, normalizePath } from '../../src/shared/path-utils.js';
-import { createSymlinkSync } from '../../src/shared/fs-utils.js';
-import { isWindows } from '../../src/shared/platform.js';
+import { pathsEqual } from '../../src/shared/path-utils.js';
+import { createDirectoryLinkSync } from '../../src/shared/fs-utils.js';
 
 let currentWorkspace: WorkspaceConfig | null = null;
 let artifactSyncStatus: 'synced' | 'pending' | 'out-of-sync' | 'unknown' = 'pending';
@@ -121,6 +120,14 @@ describe('peaks-sc service', () => {
     expect(result.missingArtifacts).toContain('No workspace configured');
   });
 
+  test('rejects artifact retention validation outside the changes directory', () => {
+    const result = validateArtifactRetention('../outside');
+
+    expect(result.valid).toBe(false);
+    expect(result.missingArtifacts).toContain('Invalid slice id');
+    expect(result.warnings).toContain('Slice id must only contain letters, numbers, dots, underscores, or hyphens');
+  });
+
   test('renders SC help text', () => {
     const help = getScHelpText();
 
@@ -154,14 +161,13 @@ describe('peaks-sc service', () => {
     expect(status.requiredArtifacts[0]?.path).toContain('<change-id>');
   });
 
-  // Skip symlink tests on Windows due to junction limitations in vitest workers
-  test.skipIf(isWindows)('resolves current change from symlink target', () => {
+  test('resolves current change from directory link target', () => {
     const workspace = currentWorkspace as WorkspaceConfig;
     const peaksPath = join(workspace.rootPath, '.peaks');
     const changeId = '2026-05-15-symlink-change';
 
-    // Create the change directory at root level (where the symlink target expects it)
     const changeDir = join(workspace.rootPath, 'changes', changeId);
+    mkdirSync(peaksPath, { recursive: true });
     mkdirSync(changeDir, { recursive: true });
     mkdirSync(join(changeDir, 'product'), { recursive: true });
     mkdirSync(join(changeDir, 'architecture'), { recursive: true });
@@ -170,24 +176,21 @@ describe('peaks-sc service', () => {
     mkdirSync(join(changeDir, 'sc'), { recursive: true });
     mkdirSync(join(changeDir, 'checkpoints'), { recursive: true });
 
-    // Create junction from target (absolute path required on Windows)
-    const targetAbs = changeDir;
-    const linkAbs = join(peaksPath, 'current-change');
-    createSymlinkSync(targetAbs, linkAbs);
+    createDirectoryLinkSync(changeDir, join(peaksPath, 'current-change'));
 
     expect(getChangeTraceabilityStatus().changeId).toBe(changeId);
   });
 
-  // Skip symlink tests on Windows due to junction limitations in vitest workers
-  test.skipIf(isWindows)('returns null when current-change symlink is broken', () => {
+  test('returns null when current-change directory link target is removed', () => {
     const workspace = currentWorkspace as WorkspaceConfig;
     const peaksPath = join(workspace.rootPath, '.peaks');
-    mkdirSync(peaksPath, { recursive: true });
+    const changeId = '2026-05-15-broken-change';
+    const changeDir = join(workspace.rootPath, 'changes', changeId);
 
-    // Create non-existent target path (broken symlink)
-    const targetAbs = join(workspace.rootPath, 'changes', 'missing-change');
-    const linkAbs = join(peaksPath, 'current-change');
-    createSymlinkSync(targetAbs, linkAbs);
+    mkdirSync(peaksPath, { recursive: true });
+    mkdirSync(changeDir, { recursive: true });
+    createDirectoryLinkSync(changeDir, join(peaksPath, 'current-change'));
+    rmSync(changeDir, { recursive: true, force: true });
 
     expect(getChangeTraceabilityStatus().changeId).toBeNull();
   });
@@ -222,9 +225,8 @@ describe('peaks-sc service', () => {
 
     const missing = validateArtifactRetention('slice-1');
     expect(missing.valid).toBe(false);
-    // Use pathsEqual-aware comparison - check that one of the missing paths ends with the expected artifact path
-    const missingPaths = missing.missingArtifacts.map(normalizePath);
-    expect(missingPaths.some(p => p.endsWith('product/prd.md'))).toBe(true);
+    expect(missing.missingArtifacts).toContain('product/prd.md');
+    expect(missing.missingArtifacts.every((artifactPath) => !artifactPath.includes(workspace.rootPath))).toBe(true);
 
     writeFileSync(join(requestedSliceDir, 'product', 'prd.md'), 'prd', 'utf-8');
     writeFileSync(join(requestedSliceDir, 'architecture', 'slice-spec.md'), 'rd', 'utf-8');

@@ -1,21 +1,21 @@
 import { describe, expect, test } from 'vitest';
-import { platform, isWindows, isMac, isLinux } from '../../src/shared/platform.js';
+import { detectPlatform, platform, isWindows, isMac, isLinux } from '../../src/shared/platform.js';
 
 describe('platform detection', () => {
   test('platform is one of supported values', () => {
     expect(['win32', 'darwin', 'linux']).toContain(platform);
   });
 
-  test('isWindows is boolean', () => {
-    expect(typeof isWindows).toBe('boolean');
+  test('detectPlatform maps win32 to win32', () => {
+    expect(detectPlatform('win32')).toBe('win32');
   });
 
-  test('isMac is boolean', () => {
-    expect(typeof isMac).toBe('boolean');
+  test('detectPlatform maps darwin to darwin', () => {
+    expect(detectPlatform('darwin')).toBe('darwin');
   });
 
-  test('isLinux is boolean', () => {
-    expect(typeof isLinux).toBe('boolean');
+  test('detectPlatform maps unknown platforms to linux', () => {
+    expect(detectPlatform('freebsd' as NodeJS.Platform)).toBe('linux');
   });
 
   test('only one platform is true', () => {

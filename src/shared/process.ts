@@ -1,14 +1,14 @@
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
-import { isWindows } from './platform.js';
-
-const execAsync = promisify(exec);
+import { execFile } from 'node:child_process';
 
 export async function execCommand(command: string, args: string[], options?: { cwd?: string }): Promise<string> {
-  const shell = isWindows ? 'cmd.exe' : '/bin/zsh';
-  const { stdout } = await execAsync(`${command} ${args.join(' ')}`, {
-    cwd: options?.cwd,
-    shell
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { cwd: options?.cwd }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(stdout.trim());
+    });
   });
-  return stdout.trim();
 }

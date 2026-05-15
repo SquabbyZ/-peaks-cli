@@ -32,17 +32,25 @@ function getLocalArtifactPath(workspace: WorkspaceConfig): string {
   return resolve(workspace.rootPath, '.peaks-artifacts');
 }
 
-function getRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): string | null {
+function getPublicRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): string | null {
   if (!artifactRepo) return null;
-  const token = process.env.GH_TOKEN;
-  const baseUrl = artifactRepo.provider === 'github'
+  return artifactRepo.provider === 'github'
     ? `https://github.com/${artifactRepo.owner}/${artifactRepo.name}.git`
     : `https://gitlab.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
-  if (token) {
-    const host = artifactRepo.provider === 'github' ? 'github.com' : 'gitlab.com';
-    return `https://x-access-token:${token}@${host}/${artifactRepo.owner}/${artifactRepo.name}.git`;
-  }
-  return baseUrl;
+}
+
+function getExecutionRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): string | null {
+  if (!artifactRepo) return null;
+  const publicUrl = getPublicRemoteUrl(artifactRepo);
+  const token = process.env.GH_TOKEN;
+  if (!token || !publicUrl) return publicUrl;
+
+  const host = artifactRepo.provider === 'github' ? 'github.com' : 'gitlab.com';
+  return `https://x-access-token:${token}@${host}/${artifactRepo.owner}/${artifactRepo.name}.git`;
+}
+
+function redactSecrets(message: string): string {
+  return message.replace(/https:\/\/x-access-token:[^@]+@/g, 'https://x-access-token:***@');
 }
 
 export async function executeArtifactSync(workspaceId?: string): Promise<SyncResult> {
@@ -63,8 +71,9 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
   }
 
   const localPath = getLocalArtifactPath(workspace);
-  const remoteUrl = getRemoteUrl(workspace.artifactRepo);
-  if (!remoteUrl) {
+  const remoteUrl = getPublicRemoteUrl(workspace.artifactRepo);
+  const executionRemoteUrl = getExecutionRemoteUrl(workspace.artifactRepo);
+  if (!remoteUrl || !executionRemoteUrl) {
     return {
       workspaceId: workspace.workspaceId,
       success: false,
@@ -84,7 +93,7 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
   if (!hasLocalDir) {
     commands.push(`git clone ${remoteUrl} "${localPath}"`);
     try {
-      await execCommand(`git clone "${remoteUrl}" "${localPath}"`, []);
+      await execCommand('git', ['clone', executionRemoteUrl, localPath]);
       output.push(`Cloned artifact repository to ${localPath}`);
     } catch (err) {
       return {
@@ -94,7 +103,7 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
         remoteUrl,
         commands,
         output,
-        error: `Clone failed: ${err instanceof Error ? err.message : String(err)}`
+        error: `Clone failed: ${redactSecrets(err instanceof Error ? err.message : String(err))}`
       };
     }
   } else {
@@ -115,7 +124,7 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
         remoteUrl,
         commands,
         output,
-        error: `Sync failed: ${err instanceof Error ? err.message : String(err)}`
+        error: `Sync failed: ${redactSecrets(err instanceof Error ? err.message : String(err))}`
       };
     }
   }

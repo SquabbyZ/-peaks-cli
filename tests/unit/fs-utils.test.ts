@@ -1,26 +1,42 @@
 import { describe, expect, test, beforeEach, afterEach } from 'vitest';
-import { createSymlinkSync, readSymlinkTarget } from '../../src/shared/fs-utils.js';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { createDirectoryLinkSync, getDirectoryLinkType, readDirectoryLinkTarget } from '../../src/shared/fs-utils.js';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-describe('createSymlinkSync', () => {
-  const testDir = join(process.env.TEMP ?? '/tmp', `fs-utils-test-${Date.now()}`);
-  beforeEach(() => mkdirSync(testDir, { recursive: true }));
-  afterEach(() => {
-    try { rmSync(testDir, { recursive: true }); } catch { /* ignore */ }
+describe('getDirectoryLinkType', () => {
+  test('uses junction on Windows', () => {
+    expect(getDirectoryLinkType('win32')).toBe('junction');
   });
 
-  test('creates symlink on unix or junction on windows', () => {
-    const target = join(testDir, 'target.txt');
-    const link = join(testDir, 'link.txt');
-    writeFileSync(target, 'content', 'utf-8');
-    createSymlinkSync(target, link);
-    expect(readSymlinkTarget(link)).toBeTruthy();
+  test('uses dir symlink type on macOS and Linux', () => {
+    expect(getDirectoryLinkType('darwin')).toBe('dir');
+    expect(getDirectoryLinkType('linux')).toBe('dir');
   });
 });
 
-describe('readSymlinkTarget', () => {
+describe('createDirectoryLinkSync', () => {
+  const testDir = join(tmpdir(), `fs-utils-test-${Date.now()}`);
+
+  beforeEach(() => mkdirSync(testDir, { recursive: true }));
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  test('creates a directory link', () => {
+    const target = join(testDir, 'target-dir');
+    const link = join(testDir, 'link-dir');
+    mkdirSync(target, { recursive: true });
+
+    createDirectoryLinkSync(target, link);
+
+    expect(readDirectoryLinkTarget(link)).toBeTruthy();
+  });
+});
+
+describe('readDirectoryLinkTarget', () => {
   test('returns null for non-existent path', () => {
-    expect(readSymlinkTarget('/non/existent')).toBeNull();
+    expect(readDirectoryLinkTarget('/non/existent')).toBeNull();
   });
 });

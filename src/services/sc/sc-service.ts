@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { basename, resolve } from 'node:path';
+import { basename, relative, resolve } from 'node:path';
 import { getCurrentWorkspaceConfig } from '../config/config-service.js';
 import { getArtifactWorkspaceStatus } from '../artifacts/workspace-service.js';
 
@@ -74,6 +74,8 @@ const RETENTION_REQUIREMENTS = [
   ['qa', 'coverage-report.md'],
   ['review', 'code-review.md']
 ] as const;
+
+const SLICE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 function getPeaksPath(workspaceRoot: string): string {
   return resolve(workspaceRoot, '.peaks');
@@ -279,11 +281,19 @@ export function validateArtifactRetention(sliceId: string): {
     };
   }
 
+  if (!SLICE_ID_PATTERN.test(sliceId)) {
+    return {
+      valid: false,
+      missingArtifacts: ['Invalid slice id'],
+      warnings: ['Slice id must only contain letters, numbers, dots, underscores, or hyphens']
+    };
+  }
+
   const { changeDir } = getRetentionChangeDir(workspace.rootPath, sliceId);
   const missingArtifacts = RETENTION_REQUIREMENTS
     .map(([folder, file]) => resolve(changeDir, folder, file))
     .filter((filePath) => !existsSync(filePath))
-    .map((filePath) => filePath.replace(`${changeDir}/`, ''));
+    .map((filePath) => relative(changeDir, filePath).replace(/\\/g, '/'));
 
   return {
     valid: missingArtifacts.length === 0,

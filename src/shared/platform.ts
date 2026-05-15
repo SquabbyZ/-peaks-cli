@@ -1,9 +1,8 @@
 export type Platform = 'win32' | 'darwin' | 'linux';
 
-function detectPlatform(): Platform {
-  const p = process.platform;
-  if (p === 'win32') return 'win32';
-  if (p === 'darwin') return 'darwin';
+export function detectPlatform(currentPlatform: NodeJS.Platform = process.platform): Platform {
+  if (currentPlatform === 'win32') return 'win32';
+  if (currentPlatform === 'darwin') return 'darwin';
   return 'linux';
 }
 
