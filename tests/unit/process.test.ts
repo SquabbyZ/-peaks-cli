@@ -31,19 +31,21 @@ describe('execCommand', () => {
     expect(execFileMock).toHaveBeenCalledWith(
       'git',
       ['clone', 'https://example.com/repo.git', 'C:\\Temp\\repo with spaces'],
-      {},
+      { cwd: undefined, env: undefined },
       expect.any(Function)
     );
     expect(execMock).not.toHaveBeenCalled();
   });
 
-  test('passes cwd separately from command arguments', async () => {
-    await execCommand('git', ['fetch', 'origin'], { cwd: 'C:\\Temp\\repo with spaces' });
+  test('passes cwd and env separately from command arguments', async () => {
+    const env = { GIT_CONFIG_COUNT: '1' } as NodeJS.ProcessEnv;
+
+    await execCommand('git', ['fetch', 'origin'], { cwd: 'C:\\Temp\\repo with spaces', env });
 
     expect(execFileMock).toHaveBeenCalledWith(
       'git',
       ['fetch', 'origin'],
-      { cwd: 'C:\\Temp\\repo with spaces' },
+      { cwd: 'C:\\Temp\\repo with spaces', env },
       expect.any(Function)
     );
   });
