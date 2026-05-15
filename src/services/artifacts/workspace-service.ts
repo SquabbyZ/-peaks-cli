@@ -1,7 +1,9 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { getCurrentWorkspaceConfig, readConfig } from '../config/config-service.js';
+import { readConfig, getCurrentWorkspaceConfig } from '../config/config-service.js';
 import type { WorkspaceConfig } from '../config/config-types.js';
+import { pathExists } from '../../shared/fs.js';
+import { execCommand } from '../../shared/process.js';
 
 export type SyncStatus = 'synced' | 'pending' | 'out-of-sync' | 'unknown';
 
@@ -16,10 +18,110 @@ export type ArtifactWorkspaceStatus = {
   nextActions: string[];
 };
 
+export type SyncResult = {
+  workspaceId: string;
+  success: boolean;
+  localPath: string;
+  remoteUrl: string | null;
+  commands: string[];
+  output: string[];
+  error?: string;
+};
+
 function getLocalArtifactPath(workspace: WorkspaceConfig): string {
-  return workspace.artifactRepo
-    ? resolve(workspace.rootPath, '.peaks-artifacts')
-    : resolve(workspace.rootPath, '.peaks-artifacts');
+  return resolve(workspace.rootPath, '.peaks-artifacts');
+}
+
+function getRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): string | null {
+  if (!artifactRepo) return null;
+  return artifactRepo.provider === 'github'
+    ? `https://github.com/${artifactRepo.owner}/${artifactRepo.name}.git`
+    : `https://gitlab.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
+}
+
+export async function executeArtifactSync(workspaceId?: string): Promise<SyncResult> {
+  const workspace = workspaceId
+    ? readConfig().workspaces.find((w) => w.workspaceId === workspaceId) ?? null
+    : getCurrentWorkspaceConfig();
+
+  if (!workspace || !workspace.artifactRepo) {
+    return {
+      workspaceId: workspaceId ?? 'unknown',
+      success: false,
+      localPath: '.peaks-artifacts',
+      remoteUrl: null,
+      commands: [],
+      output: [],
+      error: 'No artifact repository configured for this workspace'
+    };
+  }
+
+  const localPath = getLocalArtifactPath(workspace);
+  const remoteUrl = getRemoteUrl(workspace.artifactRepo);
+  if (!remoteUrl) {
+    return {
+      workspaceId: workspace.workspaceId,
+      success: false,
+      localPath,
+      remoteUrl: null,
+      commands: [],
+      output: [],
+      error: 'Invalid artifact repository configuration'
+    };
+  }
+
+  const commands: string[] = [];
+  const output: string[] = [];
+
+  const hasLocalDir = await pathExists(localPath);
+
+  if (!hasLocalDir) {
+    commands.push(`git clone ${remoteUrl} "${localPath}"`);
+    try {
+      await execCommand(`git clone "${remoteUrl}" "${localPath}"`, []);
+      output.push(`Cloned artifact repository to ${localPath}`);
+    } catch (err) {
+      return {
+        workspaceId: workspace.workspaceId,
+        success: false,
+        localPath,
+        remoteUrl,
+        commands,
+        output,
+        error: `Clone failed: ${err instanceof Error ? err.message : String(err)}`
+      };
+    }
+  } else {
+    commands.push(`cd "${localPath}" && git fetch origin`);
+    commands.push(`cd "${localPath}" && git pull origin main`);
+
+    try {
+      await execCommand('git', ['fetch', 'origin'], { cwd: localPath });
+      output.push('Fetched latest from remote');
+
+      await execCommand('git', ['pull', 'origin', 'main'], { cwd: localPath });
+      output.push('Pulled latest changes');
+    } catch (err) {
+      return {
+        workspaceId: workspace.workspaceId,
+        success: false,
+        localPath,
+        remoteUrl,
+        commands,
+        output,
+        error: `Sync failed: ${err instanceof Error ? err.message : String(err)}`
+      };
+    }
+  }
+
+  return {
+    workspaceId: workspace.workspaceId,
+    success: true,
+    localPath,
+    remoteUrl,
+    commands,
+    output
+  };
 }
 
 export function getArtifactWorkspaceStatus(workspaceId?: string): ArtifactWorkspaceStatus {

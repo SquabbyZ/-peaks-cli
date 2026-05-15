@@ -11,6 +11,7 @@ export default defineConfig({
         'src/cli/index.ts',
         'src/cli/program.ts',
         'src/shared/paths.ts',
+        'src/shared/process.ts',
         'src/services/recommendations/recommendation-types.ts',
         'src/shared/result.ts',
         'src/services/artifacts/artifact-service.ts',
