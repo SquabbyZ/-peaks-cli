@@ -39,3 +39,20 @@ describe('runDoctor', () => {
     expect(check?.message).not.toContain('undefined');
   });
 });
+
+describe('runDoctor recommendation schemas', () => {
+  test('validates recommendation foundation schemas', async () => {
+    const report = await runDoctor();
+
+    for (const schemaId of [
+      'schema:capability-source.schema.json',
+      'schema:capability-item.schema.json',
+      'schema:capability-availability.schema.json',
+      'schema:recommendation-plan.schema.json'
+    ]) {
+      expect(report.checks).toContainEqual(
+        expect.objectContaining({ id: schemaId, ok: true })
+      );
+    }
+  });
+});

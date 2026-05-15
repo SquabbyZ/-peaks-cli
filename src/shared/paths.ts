@@ -37,5 +37,9 @@ export const requiredSchemaFiles = [
   'approval-record.schema.json',
   'change-impact.schema.json',
   'refactor-slice-spec.schema.json',
-  'artifact-retention-report.schema.json'
+  'artifact-retention-report.schema.json',
+  'capability-source.schema.json',
+  'capability-item.schema.json',
+  'capability-availability.schema.json',
+  'recommendation-plan.schema.json'
 ] as const;
