@@ -5,3 +5,4 @@ coverage/
 .peaks-artifacts/
 .env
 *.log
+.DS_Store
