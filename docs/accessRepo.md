@@ -64,3 +64,5 @@ https://github.com/vercel-labs/skills
 
 设计相关
 https://reactbits.dev/
+
+https://github.com/microsoft/azure-skills
