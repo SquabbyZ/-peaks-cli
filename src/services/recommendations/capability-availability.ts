@@ -41,7 +41,6 @@ export function resolveCapabilityAvailability(
       ? undefined
       : {
           available: status === 'installable',
-          commandPreview: `peaks capability install-plan ${item.capabilityId} --json`,
           requiresApproval: true
         };
 

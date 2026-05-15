@@ -60,40 +60,37 @@ function getNextActions(
 ): RecommendationPlan['machine']['nextActions'] {
   const preferredCapabilityId = getPreferredCapabilityId(workflow);
   const preferredAvailability = availability.find((item) => item.capabilityId === preferredCapabilityId);
+  const fallbackActions = availability
+    .filter((item) => item.status !== 'available')
+    .map((item) => ({
+      id: toFallbackActionId(item.capabilityId),
+      type: 'use-fallback' as const,
+      capabilityId: item.capabilityId,
+      requiresApproval: true,
+      riskLevel: item.risk
+    }));
 
-  if (preferredAvailability?.status === 'available') {
-    if (workflow === 'code-refactor') {
-      return [
-        {
-          id: 'run-code-review',
-          type: 'invoke-capability',
-          capabilityId: preferredCapabilityId,
-          requiresApproval: false,
-          riskLevel: preferredAvailability.risk
-        }
-      ];
-    }
+  if (preferredAvailability?.status !== 'available') {
+    return fallbackActions;
+  }
 
-    return [
-      {
-        id: 'lookup-docs',
-        type: 'invoke-capability',
+  const invokeAction = workflow === 'code-refactor'
+    ? {
+        id: 'run-code-review',
+        type: 'invoke-capability' as const,
         capabilityId: preferredCapabilityId,
         requiresApproval: false,
         riskLevel: preferredAvailability.risk
       }
-    ];
-  }
+    : {
+        id: 'lookup-docs',
+        type: 'invoke-capability' as const,
+        capabilityId: preferredCapabilityId,
+        requiresApproval: false,
+        riskLevel: preferredAvailability.risk
+      };
 
-  return [
-    {
-      id: toFallbackActionId(preferredCapabilityId),
-      type: 'use-fallback',
-      capabilityId: preferredCapabilityId,
-      requiresApproval: true,
-      riskLevel: preferredAvailability?.risk ?? 'low'
-    }
-  ];
+  return [...fallbackActions, invokeAction];
 }
 
 export function createRecommendationPlan(options: CreateRecommendationPlanOptions): RecommendationPlan {

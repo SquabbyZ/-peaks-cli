@@ -53,7 +53,7 @@ describe('resolveCapabilityAvailability', () => {
     });
   });
 
-  test('marks missing MCP capabilities as installable with fallback', () => {
+  test('marks missing MCP capabilities as installable with fallback and approval-only install plan', () => {
     const availability = resolveCapabilityAvailability([docsLookup], {
       installedCapabilityIds: []
     });
@@ -64,8 +64,12 @@ describe('resolveCapabilityAvailability', () => {
       type: 'mcp',
       fallback: {
         mode: 'manual-docs-input'
+      },
+      installPlan: {
+        available: true,
+        requiresApproval: true
       }
     });
-    expect(availability[0]?.installPlan?.requiresApproval).toBe(true);
+    expect(availability[0]?.installPlan).not.toHaveProperty('commandPreview');
   });
 });

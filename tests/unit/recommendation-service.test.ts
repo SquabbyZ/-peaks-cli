@@ -24,7 +24,7 @@ describe('seed capability catalog', () => {
 });
 
 describe('createRecommendationPlan', () => {
-  test('creates localized code-refactor recommendations with stable machine actions', () => {
+  test('creates localized code-refactor recommendations with fallback actions and preferred invoke action', () => {
     const plan = createRecommendationPlan({
       workflow: 'code-refactor',
       language: 'zh-CN',
@@ -34,7 +34,25 @@ describe('createRecommendationPlan', () => {
     expect(plan.workflow).toBe('code-refactor');
     expect(plan.presentation.language).toBe('zh-CN');
     expect(plan.presentation.summary).toContain('代码重构');
-    expect(plan.machine.nextActions[0]).toMatchObject({
+    expect(plan.machine.nextActions).toEqual(
+      expect.arrayContaining([
+        {
+          id: 'use-fallback-context7-docs-lookup',
+          type: 'use-fallback',
+          capabilityId: 'context7.docs-lookup',
+          requiresApproval: true,
+          riskLevel: 'low'
+        },
+        {
+          id: 'run-code-review',
+          type: 'invoke-capability',
+          capabilityId: 'everything-claude-code.code-review-agent',
+          requiresApproval: false,
+          riskLevel: 'low'
+        }
+      ])
+    );
+    expect(plan.machine.nextActions.at(-1)).toMatchObject({
       id: 'run-code-review',
       type: 'invoke-capability',
       capabilityId: 'everything-claude-code.code-review-agent'
