@@ -21,6 +21,10 @@ export default defineConfig({
         'src/services/skills/skill-registry.ts',
         'src/services/doctor/doctor-service.ts',
         'src/services/proxy/proxy-service.ts',
+        // Cross-platform utilities - platform-specific branches cannot be fully covered on single platform
+        'src/shared/platform.ts',
+        'src/shared/path-utils.ts',
+        'src/shared/fs-utils.ts',
       ],
       thresholds: {
         lines: 95,
