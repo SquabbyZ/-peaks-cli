@@ -1,6 +1,6 @@
 export type CapabilitySourceType = 'repo' | 'skills-package' | 'mcp-collection' | 'website' | 'local-install';
 export type CapabilityItemType = 'skill' | 'agent' | 'mcp' | 'rule' | 'hook' | 'template' | 'workflow' | 'doc' | 'cli';
-export type CapabilityAvailabilityStatus = 'available' | 'missing' | 'installable' | 'disabled' | 'unknown';
+export type CapabilityAvailabilityStatus = 'available' | 'installable' | 'disabled' | 'unknown';
 export type RiskLevel = 'low' | 'medium' | 'high';
 
 export type LocalizedText = Record<string, string>;
@@ -71,7 +71,7 @@ export type RecommendationPlan = {
   intent: string;
   workflow: string;
   profile: string;
-  audience: string;
+  audience: string[];
   options: RecommendationOption[];
   requiredCapabilities: string[];
   availability: CapabilityAvailability[];
@@ -80,7 +80,7 @@ export type RecommendationPlan = {
   machine: {
     nextActions: Array<{
       id: string;
-      type: string;
+      type: 'invoke-capability' | 'use-fallback';
       capabilityId?: string;
       requiresApproval: boolean;
       riskLevel: RiskLevel;
