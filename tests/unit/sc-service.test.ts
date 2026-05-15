@@ -1,0 +1,208 @@
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
+
+let currentWorkspace: WorkspaceConfig | null = null;
+let artifactSyncStatus: 'synced' | 'pending' | 'out-of-sync' | 'unknown' = 'pending';
+let commitHash = 'abc123def456';
+let gitCwd: string | undefined;
+
+vi.mock('../../src/services/config/config-service.js', () => ({
+  getCurrentWorkspaceConfig: () => currentWorkspace,
+  readConfig: () => ({ workspaces: currentWorkspace ? [currentWorkspace] : [] })
+}));
+
+vi.mock('../../src/services/artifacts/workspace-service.js', () => ({
+  getArtifactWorkspaceStatus: () => ({
+    workspaceId: currentWorkspace?.workspaceId ?? 'unknown',
+    localPath: currentWorkspace ? join(currentWorkspace.rootPath, '.peaks-artifacts') : '.peaks-artifacts',
+    configured: Boolean(currentWorkspace?.artifactRepo),
+    syncStatus: artifactSyncStatus,
+    lastSync: null,
+    hasLocalChanges: false,
+    artifactRepo: currentWorkspace?.artifactRepo ?? null,
+    nextActions: []
+  })
+}));
+
+vi.mock('node:child_process', () => ({
+  exec: () => undefined,
+  execFileSync: (command: string, args: string[], options?: { cwd?: string }) => {
+    if (command === 'git' && args[0] === 'rev-parse') {
+      gitCwd = options?.cwd;
+      return `${commitHash}\n`;
+    }
+    if (command === 'git' && args[0] === '--version') return 'git version 2.0.0';
+    throw new Error('unexpected command');
+  }
+}));
+
+const {
+  createArtifactRetentionReport,
+  createChangeImpact,
+  getChangeTraceabilityStatus,
+  getScHelpText,
+  recordCommitBoundary,
+  validateArtifactRetention
+} = await import('../../src/services/sc/sc-service.js');
+
+function createWorkspace(provider: WorkspaceConfig['artifactRepo'] = { provider: 'github', owner: 'acme', name: 'artifact-repo' }): WorkspaceConfig {
+  const rootPath = join(tmpdir(), `peaks-sc-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  mkdirSync(rootPath, { recursive: true });
+  return {
+    workspaceId: 'ws-sc',
+    name: 'SC Workspace',
+    rootPath,
+    artifactRepo: provider ?? undefined,
+    installedCapabilityIds: []
+  };
+}
+
+function prepareChangeDir(workspace: WorkspaceConfig, changeId: string): string {
+  const changeDir = join(workspace.rootPath, '.peaks', 'changes', changeId);
+  mkdirSync(join(changeDir, 'product'), { recursive: true });
+  mkdirSync(join(changeDir, 'architecture'), { recursive: true });
+  mkdirSync(join(changeDir, 'qa'), { recursive: true });
+  mkdirSync(join(changeDir, 'review'), { recursive: true });
+  mkdirSync(join(changeDir, 'sc'), { recursive: true });
+  mkdirSync(join(changeDir, 'checkpoints'), { recursive: true });
+  return changeDir;
+}
+
+describe('peaks-sc service', () => {
+  beforeEach(() => {
+    currentWorkspace = createWorkspace();
+    artifactSyncStatus = 'pending';
+    commitHash = 'abc123def456';
+    gitCwd = undefined;
+  });
+
+  test('describes traceability status when no workspace is configured', () => {
+    currentWorkspace = null;
+
+    const status = getChangeTraceabilityStatus();
+
+    expect(status.changeId).toBeNull();
+    expect(status.hasArtifactRepo).toBe(false);
+    expect(status.nextActions[0]).toContain('Add a workspace');
+  });
+
+  test('reports change impact defaults when no workspace is configured', () => {
+    currentWorkspace = null;
+
+    const impact = createChangeImpact({ changeId: 'change-1' });
+
+    expect(impact.syncPointers.artifactRepo).toBeNull();
+    expect(impact.syncPointers.localPath).toBe('.peaks-artifacts');
+  });
+
+  test('describes retention validation failure when no workspace is configured', () => {
+    currentWorkspace = null;
+
+    const result = validateArtifactRetention('slice-1');
+
+    expect(result.valid).toBe(false);
+    expect(result.missingArtifacts).toContain('No workspace configured');
+  });
+
+  test('renders SC help text', () => {
+    const help = getScHelpText();
+
+    expect(help[0]).toContain('peaks sc status');
+    expect(help.join('\n')).toContain('peaks sc boundary');
+  });
+
+  test('describes current change and required artifacts when current-change file exists', () => {
+    const workspace = currentWorkspace as WorkspaceConfig;
+    const changeDir = prepareChangeDir(workspace, '2026-05-15-test-change');
+    writeFileSync(join(workspace.rootPath, '.peaks', 'current-change'), '2026-05-15-test-change', 'utf-8');
+    writeFileSync(join(changeDir, 'qa', 'artifact-retention-report.md'), 'retention', 'utf-8');
+    writeFileSync(join(changeDir, 'sc', 'change-impact.json'), '{}', 'utf-8');
+    writeFileSync(join(changeDir, 'checkpoints', 'commit-boundary.md'), 'boundary', 'utf-8');
+    writeFileSync(join(changeDir, 'qa', 'coverage-report.md'), 'coverage', 'utf-8');
+
+    const status = getChangeTraceabilityStatus();
+
+    expect(status.changeId).toBe('2026-05-15-test-change');
+    expect(status.requiredArtifacts.every((artifact) => artifact.exists)).toBe(true);
+    expect(status.nextActions).toContain(`Run peaks artifacts sync --workspace ${workspace.workspaceId} --dry-run`);
+  });
+
+  test('describes current change when current-change is missing and artifact repo is configured', () => {
+    const workspace = currentWorkspace as WorkspaceConfig;
+    const status = getChangeTraceabilityStatus();
+
+    expect(status.changeId).toBeNull();
+    expect(status.hasArtifactRepo).toBe(true);
+    expect(status.nextActions[0]).toBe('Set the current change in .peaks/current-change');
+    expect(status.requiredArtifacts[0]?.path).toContain('<change-id>');
+  });
+
+  test('resolves current change from symlink target', () => {
+    const workspace = currentWorkspace as WorkspaceConfig;
+    const peaksPath = join(workspace.rootPath, '.peaks');
+    mkdirSync(join(peaksPath, 'changes', '2026-05-15-symlink-change'), { recursive: true });
+    symlinkSync(join('changes', '2026-05-15-symlink-change'), join(peaksPath, 'current-change'));
+
+    expect(getChangeTraceabilityStatus().changeId).toBe('2026-05-15-symlink-change');
+  });
+
+  test('validates artifact retention by checking the requested slice directory', () => {
+    const workspace = currentWorkspace as WorkspaceConfig;
+    const currentChangeDir = prepareChangeDir(workspace, '2026-05-15-current');
+    const requestedSliceDir = prepareChangeDir(workspace, 'slice-1');
+    writeFileSync(join(workspace.rootPath, '.peaks', 'current-change'), '2026-05-15-current', 'utf-8');
+    writeFileSync(join(currentChangeDir, 'product', 'prd.md'), 'prd', 'utf-8');
+    writeFileSync(join(currentChangeDir, 'architecture', 'slice-spec.md'), 'rd', 'utf-8');
+    writeFileSync(join(currentChangeDir, 'qa', 'validation-report.md'), 'qa', 'utf-8');
+    writeFileSync(join(currentChangeDir, 'qa', 'coverage-report.md'), 'coverage', 'utf-8');
+    writeFileSync(join(currentChangeDir, 'review', 'code-review.md'), 'review', 'utf-8');
+
+    const missing = validateArtifactRetention('slice-1');
+    expect(missing.valid).toBe(false);
+    expect(missing.missingArtifacts).toContain('product/prd.md');
+
+    writeFileSync(join(requestedSliceDir, 'product', 'prd.md'), 'prd', 'utf-8');
+    writeFileSync(join(requestedSliceDir, 'architecture', 'slice-spec.md'), 'rd', 'utf-8');
+    writeFileSync(join(requestedSliceDir, 'qa', 'validation-report.md'), 'qa', 'utf-8');
+    writeFileSync(join(requestedSliceDir, 'qa', 'coverage-report.md'), 'coverage', 'utf-8');
+    writeFileSync(join(requestedSliceDir, 'review', 'code-review.md'), 'review', 'utf-8');
+
+    expect(validateArtifactRetention('slice-1').valid).toBe(true);
+  });
+
+  test('creates artifact retention reports with defaults', () => {
+    const report = createArtifactRetentionReport({ sliceId: 'slice-1' });
+
+    expect(report.sliceId).toBe('slice-1');
+    expect(report.commitStatus).toBe('pending');
+    expect(report.rollbackPoint).toBeNull();
+  });
+
+  test('populates change impact sync pointers for GitHub and GitLab repos', () => {
+    const githubImpact = createChangeImpact({ changeId: 'change-1' });
+    expect(githubImpact.syncPointers.artifactRepo).toBe('https://github.com/acme/artifact-repo.git');
+    expect(githubImpact.syncPointers.localPath).toBe(`${(currentWorkspace as WorkspaceConfig).rootPath}/.peaks-artifacts`);
+
+    currentWorkspace = createWorkspace({ provider: 'gitlab', owner: 'acme', name: 'artifact-repo' });
+    const gitlabImpact = createChangeImpact({ changeId: 'change-2' });
+    expect(gitlabImpact.syncPointers.artifactRepo).toBe('https://gitlab.com/acme/artifact-repo.git');
+  });
+
+  test('records commit boundary with current git commit as rollback point', () => {
+    const workspace = currentWorkspace as WorkspaceConfig;
+    const pendingBoundary = recordCommitBoundary({ sliceId: 'slice-1', artifacts: ['qa/report.md'], codeFiles: ['src/a.ts'] });
+    expect(pendingBoundary.commitHash).toBe('abc123def456');
+    expect(pendingBoundary.rollbackPoint).toBe('abc123def456');
+    expect(pendingBoundary.syncState).toBe('pending');
+    expect(gitCwd).toBe(workspace.rootPath);
+
+    artifactSyncStatus = 'synced';
+    expect(recordCommitBoundary({ sliceId: 'slice-2' }).syncState).toBe('synced');
+
+    artifactSyncStatus = 'out-of-sync';
+    expect(recordCommitBoundary({ sliceId: 'slice-3' }).syncState).toBe('failed');
+  });
+});

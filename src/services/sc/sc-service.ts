@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { readConfig, getCurrentWorkspaceConfig } from '../config/config-service.js';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { basename, resolve } from 'node:path';
+import { getCurrentWorkspaceConfig } from '../config/config-service.js';
 import { getArtifactWorkspaceStatus } from '../artifacts/workspace-service.js';
 
 export type ChangeImpact = {
@@ -59,43 +60,122 @@ export type CommitBoundary = {
   rollbackPoint: string | null;
 };
 
-function getLocalPeaksPath(workspaceRoot: string): string {
+const REQUIRED_ARTIFACTS = [
+  { name: 'artifact-retention-report.md', path: ['qa', 'artifact-retention-report.md'] },
+  { name: 'change-impact.json', path: ['sc', 'change-impact.json'] },
+  { name: 'commit-boundary.md', path: ['checkpoints', 'commit-boundary.md'] },
+  { name: 'coverage-report.md', path: ['qa', 'coverage-report.md'] }
+] as const;
+
+const RETENTION_REQUIREMENTS = [
+  ['product', 'prd.md'],
+  ['architecture', 'slice-spec.md'],
+  ['qa', 'validation-report.md'],
+  ['qa', 'coverage-report.md'],
+  ['review', 'code-review.md']
+] as const;
+
+function getPeaksPath(workspaceRoot: string): string {
   return resolve(workspaceRoot, '.peaks');
 }
 
-function getChangeIdFromPath(peaksPath: string): string | null {
-  const currentChangeLink = resolve(peaksPath, 'current-change');
-  // In a real implementation, we would read the symlink or file content
-  // For now, we return null as we don't have the actual symlink implementation
-  return null;
+function resolveCurrentChangeId(peaksPath: string): string | null {
+  const currentChangePath = resolve(peaksPath, 'current-change');
+  if (!existsSync(currentChangePath)) return null;
+
+  try {
+    const stat = lstatSync(currentChangePath);
+    if (stat.isSymbolicLink()) {
+      return basename(realpathSync(currentChangePath));
+    }
+
+    const raw = readFileSync(currentChangePath, 'utf-8').trim();
+    if (!raw) return null;
+    return basename(raw);
+  } catch {
+    return null;
+  }
 }
 
-function findArtifactFiles(dir: string, extensions: string[]): string[] {
-  // This is a simplified implementation
-  // In production, we would recursively scan the directory
-  return [];
+function getArtifactRepoUrl(artifactRepo: { provider: 'github' | 'gitlab'; owner: string; name: string } | undefined): string | null {
+  if (!artifactRepo) return null;
+  if (artifactRepo.provider === 'github') {
+    return `https://github.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
+  }
+  return `https://gitlab.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
+}
+
+function getCurrentCommitHash(workspaceRoot?: string): string | null {
+  if (!workspaceRoot) return null;
+
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf-8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function mapSyncState(syncStatus: 'synced' | 'pending' | 'out-of-sync' | 'unknown'): 'synced' | 'pending' | 'failed' {
+  if (syncStatus === 'synced') return 'synced';
+  if (syncStatus === 'pending') return 'pending';
+  return 'failed';
+}
+
+function getCurrentArtifactDir(workspaceRoot: string): { peaksPath: string; changeId: string | null; changeDir: string } {
+  const peaksPath = getPeaksPath(workspaceRoot);
+  const changeId = resolveCurrentChangeId(peaksPath);
+  const effectiveChangeId = changeId ?? 'unknown-change';
+  return {
+    peaksPath,
+    changeId,
+    changeDir: resolve(peaksPath, 'changes', effectiveChangeId)
+  };
+}
+
+function getRetentionChangeDir(workspaceRoot: string, sliceId: string): { peaksPath: string; changeId: string; changeDir: string } {
+  const peaksPath = getPeaksPath(workspaceRoot);
+  return {
+    peaksPath,
+    changeId: sliceId,
+    changeDir: resolve(peaksPath, 'changes', sliceId)
+  };
 }
 
 export function getChangeTraceabilityStatus(): ChangeTraceabilityStatus {
   const workspace = getCurrentWorkspaceConfig();
-  const artifactStatus = getArtifactWorkspaceStatus();
+  const artifactStatus = getArtifactWorkspaceStatus(workspace?.workspaceId);
 
-  const peaksPath = workspace ? getLocalPeaksPath(workspace.rootPath) : '.peaks';
-  const changeId = getChangeIdFromPath(peaksPath);
+  if (!workspace) {
+    return {
+      changeId: null,
+      hasArtifactRepo: false,
+      artifactSyncStatus: 'unknown',
+      localArtifactPath: '.peaks-artifacts',
+      requiredArtifacts: REQUIRED_ARTIFACTS.map((artifact) => ({
+        name: artifact.name,
+        path: resolve('.peaks', 'changes', '<change-id>', ...artifact.path),
+        exists: false
+      })),
+      nextActions: ['Add a workspace: peaks config workspace add --id <id> --name <name> --path <path>']
+    };
+  }
 
-  const requiredArtifacts = [
-    { name: 'artifact-retention-report.md', path: 'qa/artifact-retention-report.md' },
-    { name: 'change-impact.json', path: 'sc/change-impact.json' },
-    { name: 'commit-boundary.md', path: 'checkpoints/commit-boundary.md' },
-    { name: 'coverage-report.md', path: 'qa/coverage-report.md' }
-  ];
-
-  const artifactRepoConfigured = !!workspace?.artifactRepo;
+  const { peaksPath, changeId, changeDir } = getCurrentArtifactDir(workspace.rootPath);
+  const hasArtifactRepo = Boolean(workspace.artifactRepo);
+  const requiredArtifacts = REQUIRED_ARTIFACTS.map((artifact) => {
+    const artifactPath = resolve(changeDir, ...artifact.path);
+    return {
+      name: artifact.name,
+      path: resolve(peaksPath, 'changes', changeId ?? '<change-id>', ...artifact.path),
+      exists: existsSync(artifactPath)
+    };
+  });
 
   const nextActions: string[] = [];
-  if (!workspace) {
-    nextActions.push('Add a workspace: peaks config workspace add --id <id> --name <name> --path <path>');
-  } else if (!artifactRepoConfigured) {
+  if (!changeId) {
+    nextActions.push('Set the current change in .peaks/current-change');
+  }
+  if (!hasArtifactRepo) {
     nextActions.push('Configure artifact repo: peaks config workspace add --id <id> --provider github --repo-owner <owner> --repo-name <name>');
     nextActions.push('Then run: peaks artifacts init --provider github --name <repo> --dry-run');
   } else if (artifactStatus.syncStatus === 'pending') {
@@ -104,14 +184,10 @@ export function getChangeTraceabilityStatus(): ChangeTraceabilityStatus {
 
   return {
     changeId,
-    hasArtifactRepo: artifactRepoConfigured,
+    hasArtifactRepo,
     artifactSyncStatus: artifactStatus.syncStatus,
     localArtifactPath: artifactStatus.localPath,
-    requiredArtifacts: requiredArtifacts.map((a) => ({
-      ...a,
-      path: resolve(peaksPath, 'changes', changeId ?? '<change-id>', a.path),
-      exists: existsSync(resolve(peaksPath, 'changes', changeId ?? '<change-id>', a.path))
-    })),
+    requiredArtifacts,
     nextActions
   };
 }
@@ -122,6 +198,9 @@ export function createChangeImpact(options: {
   affectedModules?: string[];
   affectedFiles?: string[];
 }): ChangeImpact {
+  const workspace = getCurrentWorkspaceConfig();
+  const artifactRepo = workspace?.artifactRepo ?? null;
+
   return {
     changeId: options.changeId,
     sourceArtifacts: options.sourceArtifacts ?? [],
@@ -137,9 +216,9 @@ export function createChangeImpact(options: {
       factors: ['Manual review required', 'No automated gates detected']
     },
     syncPointers: {
-      artifactRepo: null,
+      artifactRepo: getArtifactRepoUrl(artifactRepo ?? undefined),
       lastSync: null,
-      localPath: '.peaks-artifacts'
+      localPath: workspace ? resolve(workspace.rootPath, '.peaks-artifacts') : '.peaks-artifacts'
     }
   };
 }
@@ -171,14 +250,18 @@ export function recordCommitBoundary(options: {
   artifacts?: string[];
   codeFiles?: string[];
 }): CommitBoundary {
+  const workspace = getCurrentWorkspaceConfig();
+  const artifactStatus = getArtifactWorkspaceStatus(workspace?.workspaceId);
+  const commitHash = getCurrentCommitHash(workspace?.rootPath);
+
   return {
     sliceId: options.sliceId,
-    commitHash: null,
+    commitHash,
     timestamp: new Date().toISOString(),
     artifacts: options.artifacts ?? [],
     codeFiles: options.codeFiles ?? [],
-    syncState: 'pending',
-    rollbackPoint: null
+    syncState: mapSyncState(artifactStatus.syncStatus),
+    rollbackPoint: commitHash
   };
 }
 
@@ -196,30 +279,16 @@ export function validateArtifactRetention(sliceId: string): {
     };
   }
 
-  const missingArtifacts: string[] = [];
-  const warnings: string[] = [];
-
-  const requiredArtifactTypes = [
-    { type: 'prd', pattern: 'product/' },
-    { type: 'rd', pattern: 'architecture/' },
-    { type: 'qa', pattern: 'qa/' },
-    { type: 'coverage', pattern: 'qa/' },
-    { type: 'review', pattern: 'review/' }
-  ];
-
-  // Check for required artifact directories
-  for (const artifactType of requiredArtifactTypes) {
-    if (artifactType.type === 'coverage') {
-      // Coverage artifacts are validated separately
-      continue;
-    }
-    warnings.push(`Artifact type ${artifactType.type} validation requires manual verification`);
-  }
+  const { changeDir } = getRetentionChangeDir(workspace.rootPath, sliceId);
+  const missingArtifacts = RETENTION_REQUIREMENTS
+    .map(([folder, file]) => resolve(changeDir, folder, file))
+    .filter((filePath) => !existsSync(filePath))
+    .map((filePath) => filePath.replace(`${changeDir}/`, ''));
 
   return {
     valid: missingArtifacts.length === 0,
     missingArtifacts,
-    warnings
+    warnings: missingArtifacts.length === 0 ? [] : ['Some required artifact files are missing']
   };
 }
 

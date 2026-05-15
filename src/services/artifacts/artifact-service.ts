@@ -1,3 +1,9 @@
+import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+import { getCurrentWorkspaceConfig } from '../config/config-service.js';
+
 export type ArtifactProvider = 'github' | 'gitlab';
 
 export type ArtifactInitPlan = {
@@ -30,6 +36,29 @@ export type GuidedArtifactSetup = {
   guidance: string[];
 };
 
+function getRemoteUrl(artifactRepo: { provider: ArtifactProvider; owner: string; name: string } | undefined): string | null {
+  if (!artifactRepo) return null;
+  if (artifactRepo.provider === 'github') {
+    return `https://github.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
+  }
+  return `https://gitlab.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
+}
+
+function hasGit(): boolean {
+  try {
+    execFileSync('git', ['--version']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasSshKey(): boolean {
+  const sshDir = resolve(process.env.HOME ?? homedir(), '.ssh');
+  const keyNames = ['id_ed25519', 'id_rsa', 'id_ecdsa', 'id_dsa'];
+  return keyNames.some((keyName) => existsSync(resolve(sshDir, keyName)));
+}
+
 export function createArtifactInitPlan(options: {
   provider: ArtifactProvider;
   name: string;
@@ -55,47 +84,35 @@ export function createArtifactInitPlan(options: {
 }
 
 export function createGuidedArtifactSetup(): GuidedArtifactSetup {
+  const workspace = getCurrentWorkspaceConfig();
+  const artifactRepo = workspace?.artifactRepo ?? null;
   const validationResult = {
-    workspaceExists: false,
-    gitAvailable: false,
-    ghTokenAvailable: false,
-    sshKeyAvailable: false
+    workspaceExists: workspace !== null,
+    gitAvailable: hasGit(),
+    ghTokenAvailable: Boolean(process.env.GH_TOKEN?.trim()),
+    sshKeyAvailable: hasSshKey()
   };
 
-  const guidance: string[] = [];
-
-  // Check for GH_TOKEN environment variable
-  if (process.env.GH_TOKEN) {
-    validationResult.ghTokenAvailable = true;
-  }
-
-  // Check for SSH key (simplified check)
-  const sshKeyPath = `${process.env.HOME}/.ssh/id_rsa`;
-  try {
-    const { existsSync } = require('node:fs');
-    if (existsSync(sshKeyPath)) {
-      validationResult.sshKeyAvailable = true;
-    }
-  } catch {
-    // fs check failed
-  }
+  const localPath = workspace ? resolve(workspace.rootPath, '.peaks-artifacts') : '.peaks-artifacts';
+  const remoteUrl = getRemoteUrl(artifactRepo ?? undefined);
 
   return {
     step: 'detect',
-    workspaceId: null,
-    workspacePath: null,
-    provider: null,
-    repoOwner: null,
-    repoName: null,
-    localPath: '.peaks-artifacts',
-    remoteUrl: null,
+    workspaceId: workspace?.workspaceId ?? null,
+    workspacePath: workspace?.rootPath ?? null,
+    provider: artifactRepo?.provider ?? null,
+    repoOwner: artifactRepo?.owner ?? null,
+    repoName: artifactRepo?.name ?? null,
+    localPath,
+    remoteUrl,
     validationResult,
-    nextStep: 'configure',
+    nextStep: workspace ? (artifactRepo ? 'validate' : 'configure') : 'configure',
     guidance: [
       'Step 1: Detect current workspace and environment',
-      '  - Check if workspace is configured: peaks config workspace list',
-      '  - GH_TOKEN environment variable: ' + (validationResult.ghTokenAvailable ? 'available' : 'not set'),
-      '  - SSH key for code push: ' + (validationResult.sshKeyAvailable ? 'available' : 'not found'),
+      `  - Workspace: ${workspace?.workspaceId ?? 'not configured'}`,
+      `  - Git available: ${validationResult.gitAvailable ? 'yes' : 'no'}`,
+      `  - GH_TOKEN environment variable: ${validationResult.ghTokenAvailable ? 'available' : 'not set'}`,
+      `  - SSH key for code push: ${validationResult.sshKeyAvailable ? 'available' : 'not found'}`,
       '',
       'Step 2: Configure artifact repository',
       '  - Run: peaks artifacts init --provider github --name <repo> --dry-run',

@@ -183,6 +183,13 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
     printResult(io, ok('artifacts.workspace', getArtifactWorkspaceStatus(options.workspace)), options.json);
   });
   addJsonOption(artifacts.command('setup').description('Interactive guided artifact repository setup').option('--step <step>', 'start from specific step: detect, configure, validate, complete')).action((options: { step?: string; json?: boolean }) => {
+    const validSteps = ['detect', 'configure', 'validate', 'complete'] as const;
+    if (options.step && !validSteps.includes(options.step as (typeof validSteps)[number])) {
+      printResult(io, fail('artifacts.setup', 'INVALID_ARTIFACT_SETUP_STEP', `Invalid artifact setup step ${options.step}`, {}, ['Use one of: detect, configure, validate, complete']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
     const setup = createGuidedArtifactSetup();
     if (options.step) {
       setup.step = options.step as 'detect' | 'configure' | 'validate' | 'complete';

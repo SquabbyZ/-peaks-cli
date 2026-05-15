@@ -273,6 +273,15 @@ describe('createProgram', () => {
     expect(output.command).toBe('artifacts.workspace');
   });
 
+  test('rejects invalid guided artifact setup step', async () => {
+    const result = await runCommand(['artifacts', 'setup', '--step', 'invalid', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_ARTIFACT_SETUP_STEP');
+    expect(result.exitCode).toBe(1);
+  });
+
   test('config workspace add with artifact repo', async () => {
     const result = await runCommand([
       'config', 'workspace', 'add',
