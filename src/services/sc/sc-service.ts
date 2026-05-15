@@ -75,7 +75,7 @@ const RETENTION_REQUIREMENTS = [
   ['review', 'code-review.md']
 ] as const;
 
-const SLICE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const SLICE_ID_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
 
 function getPeaksPath(workspaceRoot: string): string {
   return resolve(workspaceRoot, '.peaks');
@@ -285,7 +285,7 @@ export function validateArtifactRetention(sliceId: string): {
     return {
       valid: false,
       missingArtifacts: ['Invalid slice id'],
-      warnings: ['Slice id must only contain letters, numbers, dots, underscores, or hyphens']
+      warnings: ['Slice id must stay inside .peaks/changes and only contain letters, numbers, dots, underscores, or hyphens']
     };
   }
 

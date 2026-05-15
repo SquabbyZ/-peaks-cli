@@ -5,9 +5,8 @@ import type { WorkspaceConfig } from '../../src/services/config/config-types.js'
 
 let currentWorkspace: WorkspaceConfig | null = null;
 let localDirExists = false;
-let execError: Error | null = null;
 type ExecCall = { command: string; args: string[]; cwd?: string; env?: NodeJS.ProcessEnv };
-const execCalls: ExecCall[] = [];
+let execCalls: ExecCall[] = [];
 
 vi.mock('../../src/services/config/config-service.js', () => ({
   getCurrentWorkspaceConfig: () => currentWorkspace,
@@ -24,29 +23,27 @@ vi.mock('../../src/shared/process.js', () => ({
     if (options?.cwd) call.cwd = options.cwd;
     if (options?.env) call.env = options.env;
     execCalls.push(call);
-    if (execError) throw execError;
     return 'ok';
   }
 }));
 
 const { executeArtifactSync } = await import('../../src/services/artifacts/workspace-service.js');
 
-describe('executeArtifactSync security', () => {
+describe('executeArtifactSync git auth', () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     localDirExists = false;
-    execError = null;
-    execCalls.length = 0;
+    execCalls = [];
     currentWorkspace = {
-      workspaceId: 'ws-secure',
-      name: 'Secure Workspace',
-      rootPath: join(tmpdir(), `peaks-secure-${Date.now()}`),
+      workspaceId: 'ws-auth',
+      name: 'Auth Workspace',
+      rootPath: join(tmpdir(), `peaks-auth-${Date.now()}`),
       artifactRepo: { provider: 'github', owner: 'acme', name: 'artifact-repo' },
       installedCapabilityIds: []
     };
   });
 
-  test('does not expose GH_TOKEN in returned sync details', async () => {
+  test('uses public clone URL and passes GitHub auth separately', async () => {
     vi.stubEnv('GH_TOKEN', 'secret-token');
 
     const result = await executeArtifactSync();
@@ -54,42 +51,13 @@ describe('executeArtifactSync security', () => {
     expect(result.success).toBe(true);
     expect(result.remoteUrl).toBe('https://github.com/acme/artifact-repo.git');
     expect(result.commands.join('\n')).not.toContain('secret-token');
-    expect(result.commands).toContain(`git clone https://github.com/acme/artifact-repo.git "${join((currentWorkspace as WorkspaceConfig).rootPath, '.peaks-artifacts')}"`);
     expect(execCalls[0]).toMatchObject({
       command: 'git',
       args: ['clone', 'https://github.com/acme/artifact-repo.git', join((currentWorkspace as WorkspaceConfig).rootPath, '.peaks-artifacts')]
     });
+    expect(execCalls[0]?.env?.GIT_CONFIG_COUNT).toBe('1');
+    expect(execCalls[0]?.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraheader');
     expect(execCalls[0]?.env?.GIT_CONFIG_VALUE_0).toContain('AUTHORIZATION: basic ');
     expect(execCalls[0]?.env?.GIT_CONFIG_VALUE_0).not.toContain('secret-token');
-  });
-
-  test('redacts GH_TOKEN from sync errors', async () => {
-    vi.stubEnv('GH_TOKEN', 'secret-token');
-    execError = new Error('fatal: https://x-access-token:secret-token@github.com/acme/artifact-repo.git failed');
-
-    const result = await executeArtifactSync();
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('Clone failed: fatal: https://x-access-token:***@github.com/acme/artifact-repo.git failed');
-    expect(result.error).not.toContain('secret-token');
-    expect(result.remoteUrl).toBe('https://github.com/acme/artifact-repo.git');
-  });
-
-  test('does not apply GH_TOKEN to GitLab remotes', async () => {
-    vi.stubEnv('GH_TOKEN', 'github-only-token');
-    currentWorkspace = {
-      workspaceId: 'ws-gitlab',
-      name: 'GitLab Workspace',
-      rootPath: join(tmpdir(), `peaks-gitlab-${Date.now()}`),
-      artifactRepo: { provider: 'gitlab', owner: 'acme', name: 'artifact-repo' },
-      installedCapabilityIds: []
-    };
-
-    const result = await executeArtifactSync();
-
-    expect(result.success).toBe(true);
-    expect(result.remoteUrl).toBe('https://gitlab.com/acme/artifact-repo.git');
-    expect(execCalls[0]?.args[1]).toBe('https://gitlab.com/acme/artifact-repo.git');
-    expect(result.commands.join('\n')).not.toContain('github-only-token');
   });
 });

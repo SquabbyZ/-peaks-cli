@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
 import { resolve } from 'node:path';
 import { readConfig, getCurrentWorkspaceConfig } from '../config/config-service.js';
 import type { WorkspaceConfig } from '../config/config-types.js';
@@ -39,14 +40,19 @@ function getPublicRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): stri
     : `https://gitlab.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
 }
 
-function getExecutionRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): string | null {
-  if (!artifactRepo) return null;
-  const publicUrl = getPublicRemoteUrl(artifactRepo);
-  const token = process.env.GH_TOKEN;
-  if (!token || !publicUrl) return publicUrl;
+function getGitAuthEnv(artifactRepo: WorkspaceConfig['artifactRepo']): NodeJS.ProcessEnv | undefined {
+  if (!artifactRepo || artifactRepo.provider !== 'github') return undefined;
 
-  const host = artifactRepo.provider === 'github' ? 'github.com' : 'gitlab.com';
-  return `https://x-access-token:${token}@${host}/${artifactRepo.owner}/${artifactRepo.name}.git`;
+  const token = process.env.GH_TOKEN;
+  if (!token) return undefined;
+
+  const authValue = Buffer.from(`x-access-token:${token}`, 'utf-8').toString('base64');
+  return {
+    ...process.env,
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${authValue}`
+  };
 }
 
 function redactSecrets(message: string): string {
@@ -72,8 +78,8 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
 
   const localPath = getLocalArtifactPath(workspace);
   const remoteUrl = getPublicRemoteUrl(workspace.artifactRepo);
-  const executionRemoteUrl = getExecutionRemoteUrl(workspace.artifactRepo);
-  if (!remoteUrl || !executionRemoteUrl) {
+  const gitAuthEnv = getGitAuthEnv(workspace.artifactRepo);
+  if (!remoteUrl) {
     return {
       workspaceId: workspace.workspaceId,
       success: false,
@@ -93,7 +99,7 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
   if (!hasLocalDir) {
     commands.push(`git clone ${remoteUrl} "${localPath}"`);
     try {
-      await execCommand('git', ['clone', executionRemoteUrl, localPath]);
+      await execCommand('git', ['clone', remoteUrl, localPath], { env: gitAuthEnv });
       output.push(`Cloned artifact repository to ${localPath}`);
     } catch (err) {
       return {
@@ -111,10 +117,10 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
     commands.push(`cd "${localPath}" && git pull origin main`);
 
     try {
-      await execCommand('git', ['fetch', 'origin'], { cwd: localPath });
+      await execCommand('git', ['fetch', 'origin'], { cwd: localPath, env: gitAuthEnv });
       output.push('Fetched latest from remote');
 
-      await execCommand('git', ['pull', 'origin', 'main'], { cwd: localPath });
+      await execCommand('git', ['pull', 'origin', 'main'], { cwd: localPath, env: gitAuthEnv });
       output.push('Pulled latest changes');
     } catch (err) {
       return {

@@ -120,12 +120,12 @@ describe('peaks-sc service', () => {
     expect(result.missingArtifacts).toContain('No workspace configured');
   });
 
-  test('rejects artifact retention validation outside the changes directory', () => {
-    const result = validateArtifactRetention('../outside');
+  test.each(['../outside', '.', '..'])('rejects artifact retention validation outside the changes directory: %s', (sliceId) => {
+    const result = validateArtifactRetention(sliceId);
 
     expect(result.valid).toBe(false);
     expect(result.missingArtifacts).toContain('Invalid slice id');
-    expect(result.warnings).toContain('Slice id must only contain letters, numbers, dots, underscores, or hyphens');
+    expect(result.warnings).toContain('Slice id must stay inside .peaks/changes and only contain letters, numbers, dots, underscores, or hyphens');
   });
 
   test('renders SC help text', () => {
