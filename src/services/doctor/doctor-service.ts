@@ -1,4 +1,6 @@
 import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { readText } from '../../shared/fs.js';
 import { requiredSchemaFiles, requiredSkillNames, schemasDir } from '../../shared/paths.js';
 import { getErrorMessage } from '../../shared/result.js';
@@ -72,6 +74,14 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       });
     }
   }
+
+  const userConfigPath = join(homedir(), '.peaks', 'config.json');
+  const hasUserConfig = existsSync(userConfigPath);
+  checks.push({
+    id: 'config:user',
+    ok: hasUserConfig,
+    message: hasUserConfig ? 'User config exists at ~/.peaks/config.json' : 'User config not found at ~/.peaks/config.json'
+  });
 
   const failed = checks.filter((check) => !check.ok).length;
   return {

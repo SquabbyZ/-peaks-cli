@@ -5,4 +5,4 @@ coverage/
 .peaks-artifacts/
 .env
 *.log
-.DS_Store.claude/worktrees/
+.DS_Store

@@ -41,5 +41,6 @@ export const requiredSchemaFiles = [
   'capability-source.schema.json',
   'capability-item.schema.json',
   'capability-availability.schema.json',
-  'recommendation-plan.schema.json'
+  'recommendation-plan.schema.json',
+  'artifact-workspace.schema.json'
 ] as const;

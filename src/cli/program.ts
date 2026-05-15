@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import { createArtifactInitPlan, getArtifactStatus, type ArtifactProvider } from '../services/artifacts/artifact-service.js';
+import { getArtifactWorkspaceStatus, planArtifactSync } from '../services/artifacts/workspace-service.js';
+import { readConfig, getConfig, setConfig, addWorkspace, removeWorkspace, setCurrentWorkspace, type ConfigLayer } from '../services/config/config-service.js';
 import { runDoctor } from '../services/doctor/doctor-service.js';
 import { listProfiles } from '../services/profiles/profile-service.js';
 import { planProxyTest } from '../services/proxy/proxy-service.js';
@@ -151,6 +153,23 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       dryRun: options.dryRun ?? true
     })), options.json);
   });
+  addJsonOption(
+    artifacts
+      .command('sync')
+      .description('Plan sync between local artifact workspace and remote repository')
+      .option('--workspace <id>', 'workspace identifier (uses current if not specified)')
+      .option('--dry-run', 'preview sync plan without executing', true)
+      .option('--no-dry-run', 'unsupported: do not sync from this CLI')
+  ).action((options: { workspace?: string; dryRun?: boolean; json?: boolean }) => {
+    if (options.dryRun === false) {
+      failUnsupportedNonDryRun(io, 'artifacts.sync', options.json);
+      return;
+    }
+    printResult(io, ok('artifacts.sync', planArtifactSync(options.workspace, options.dryRun ?? true)), options.json);
+  });
+  addJsonOption(artifacts.command('workspace').description('Show artifact workspace status for current or specified workspace').option('--workspace <id>', 'workspace identifier')).action((options: { workspace?: string; json?: boolean }) => {
+    printResult(io, ok('artifacts.workspace', getArtifactWorkspaceStatus(options.workspace)), options.json);
+  });
 
   addJsonOption(
     program
@@ -210,6 +229,85 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
   addJsonOption(capability.command('status').description('Show seed capability availability')).action((options: { json?: boolean }) => {
     const availability = resolveCapabilityAvailability(seedCapabilityItems);
     printResult(io, ok('capability.status', { sources: seedCapabilitySources, items: seedCapabilityItems, availability }), options.json);
+  });
+
+  const config = program.command('config').description('Manage Peaks configuration');
+  addJsonOption(config.command('get').description('Get current config or a specific key').option('--key <path>', 'dot-notation key path').option('--layer <layer>', 'user or project')).action((options: { key?: string; layer?: ConfigLayer; json?: boolean }) => {
+    const getOpts: { key?: string; layer?: ConfigLayer } = {};
+    if (options.key !== undefined) getOpts.key = options.key;
+    if (options.layer !== undefined) getOpts.layer = options.layer;
+    printResult(io, ok('config.get', getConfig(getOpts)), options.json);
+  });
+  addJsonOption(
+    config
+      .command('set')
+      .description('Set a config value')
+      .requiredOption('--key <path>', 'dot-notation key path')
+      .requiredOption('--value <json>', 'JSON value')
+      .option('--layer <layer>', 'user or project', 'user')
+  ).action((options: { key: string; value: string; layer?: ConfigLayer; json?: boolean }) => {
+    try {
+      const parsed = JSON.parse(options.value);
+      setConfig({ key: options.key, value: parsed, layer: options.layer ?? 'user' });
+      printResult(io, ok('config.set', { key: options.key, value: parsed }), options.json);
+    } catch {
+      printResult(io, fail('config.set', 'INVALID_JSON', `Could not parse value as JSON: ${options.value}`, {}, ['Use valid JSON: --value \'{"key":"value"}\'']), options.json);
+      process.exitCode = 1;
+    }
+  });
+
+  const configWorkspace = config.command('workspace').description('Manage workspaces');
+  addJsonOption(configWorkspace.command('list').description('List all workspaces')).action((options: { json?: boolean }) => {
+    const cfg = readConfig();
+    printResult(io, ok('config.workspace.list', { currentWorkspace: cfg.currentWorkspace, workspaces: cfg.workspaces }), options.json);
+  });
+  addJsonOption(
+    configWorkspace
+      .command('add')
+      .description('Add a workspace')
+      .requiredOption('--id <id>', 'workspace identifier')
+      .requiredOption('--name <name>', 'workspace display name')
+      .requiredOption('--path <path>', 'workspace root path')
+      .option('--provider <provider>', 'artifact repo provider: github or gitlab')
+      .option('--repo-owner <owner>', 'artifact repo owner')
+      .option('--repo-name <name>', 'artifact repo name')
+      .option('--layer <layer>', 'user or project', 'user')
+  ).action((options: { id: string; name: string; path: string; provider?: string; repoOwner?: string; repoName?: string; layer?: ConfigLayer; json?: boolean }) => {
+    const artifactRepo = options.provider && options.repoOwner && options.repoName
+      ? { provider: options.provider as 'github' | 'gitlab', owner: options.repoOwner, name: options.repoName }
+      : undefined;
+
+    const workspace = { workspaceId: options.id, name: options.name, rootPath: options.path, installedCapabilityIds: [] as string[] };
+    if (artifactRepo) {
+      addWorkspace({ ...workspace, artifactRepo }, options.layer ?? 'user');
+    } else {
+      addWorkspace(workspace, options.layer ?? 'user');
+    }
+    printResult(io, ok('config.workspace.add', { workspaceId: options.id, name: options.name, rootPath: options.path, artifactRepo }), options.json);
+  });
+  addJsonOption(
+    configWorkspace
+      .command('remove')
+      .description('Remove a workspace')
+      .requiredOption('--id <id>', 'workspace identifier')
+      .option('--layer <layer>', 'user or project', 'user')
+  ).action((options: { id: string; layer?: ConfigLayer; json?: boolean }) => {
+    const removed = removeWorkspace(options.id, options.layer ?? 'user');
+    if (removed) {
+      printResult(io, ok('config.workspace.remove', { workspaceId: options.id }), options.json);
+    } else {
+      printResult(io, fail('config.workspace.remove', 'WORKSPACE_NOT_FOUND', `Workspace ${options.id} not found`, {}, ['List workspaces with: peaks config workspace list']), options.json);
+      process.exitCode = 1;
+    }
+  });
+  addJsonOption(configWorkspace.command('switch').description('Switch current workspace').requiredOption('--id <id>', 'workspace identifier').option('--layer <layer>', 'user or project', 'user')).action((options: { id: string; layer?: ConfigLayer; json?: boolean }) => {
+    const switched = setCurrentWorkspace(options.id);
+    if (switched) {
+      printResult(io, ok('config.workspace.switch', { currentWorkspace: options.id }), options.json);
+    } else {
+      printResult(io, fail('config.workspace.switch', 'WORKSPACE_NOT_FOUND', `Workspace ${options.id} not found`, {}, ['List workspaces with: peaks config workspace list']), options.json);
+      process.exitCode = 1;
+    }
   });
 
   return program;
