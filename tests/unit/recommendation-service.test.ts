@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { createRecommendationPlan } from '../../src/services/recommendations/recommendation-service.js';
 import { seedCapabilityItems, seedCapabilitySources } from '../../src/services/recommendations/seed-capability-catalog.js';
 
 describe('seed capability catalog', () => {
@@ -19,5 +20,105 @@ describe('seed capability catalog', () => {
     expect(source?.sourceType).toBe('mcp-collection');
     expect(context7?.itemType).toBe('mcp');
     expect(context7?.workflows).toContain('code-refactor');
+  });
+});
+
+describe('createRecommendationPlan', () => {
+  test('creates localized code-refactor recommendations with stable machine actions', () => {
+    const plan = createRecommendationPlan({
+      workflow: 'code-refactor',
+      language: 'zh-CN',
+      installedCapabilityIds: ['everything-claude-code.code-review-agent']
+    });
+
+    expect(plan.workflow).toBe('code-refactor');
+    expect(plan.presentation.language).toBe('zh-CN');
+    expect(plan.presentation.summary).toContain('代码重构');
+    expect(plan.machine.nextActions[0]).toMatchObject({
+      id: 'run-code-review',
+      type: 'invoke-capability',
+      capabilityId: 'everything-claude-code.code-review-agent'
+    });
+  });
+
+  test('includes explicit fallback for missing docs lookup capability', () => {
+    const plan = createRecommendationPlan({
+      workflow: 'code-refactor',
+      language: 'zh-CN',
+      installedCapabilityIds: []
+    });
+
+    const docsAvailability = plan.availability.find((item) => item.capabilityId === 'context7.docs-lookup');
+
+    expect(docsAvailability?.status).toBe('installable');
+    expect(docsAvailability?.fallback.mode).toBe('manual-docs-input');
+    expect(plan.presentation.warnings.join('\n')).toContain('缺少');
+  });
+
+  test('uses docs lookup as the first machine action for product refactor', () => {
+    const plan = createRecommendationPlan({
+      workflow: 'product-refactor',
+      installedCapabilityIds: ['context7.docs-lookup']
+    });
+
+    expect(plan.machine.nextActions[0]).toMatchObject({
+      id: 'lookup-docs',
+      type: 'invoke-capability',
+      capabilityId: 'context7.docs-lookup'
+    });
+    expect(plan.machine.nextActions[0]?.capabilityId).not.toBe('everything-claude-code.code-review-agent');
+  });
+
+  test('uses docs lookup as the first machine action for frontend design', () => {
+    const plan = createRecommendationPlan({
+      workflow: 'frontend-design',
+      installedCapabilityIds: ['context7.docs-lookup']
+    });
+
+    expect(plan.machine.nextActions[0]).toMatchObject({
+      id: 'lookup-docs',
+      type: 'invoke-capability',
+      capabilityId: 'context7.docs-lookup'
+    });
+    expect(plan.machine.nextActions[0]?.capabilityId).not.toBe('everything-claude-code.code-review-agent');
+  });
+
+  test('uses fallback as the first machine action for code refactor when review agent is not installed', () => {
+    const plan = createRecommendationPlan({
+      workflow: 'code-refactor',
+      installedCapabilityIds: []
+    });
+
+    expect(plan.machine.nextActions[0]).toMatchObject({
+      type: 'use-fallback',
+      capabilityId: 'everything-claude-code.code-review-agent',
+      requiresApproval: true
+    });
+  });
+
+  test('uses fallback as the first machine action for product refactor when docs lookup is not installed', () => {
+    const plan = createRecommendationPlan({
+      workflow: 'product-refactor',
+      installedCapabilityIds: []
+    });
+
+    expect(plan.machine.nextActions[0]).toMatchObject({
+      type: 'use-fallback',
+      capabilityId: 'context7.docs-lookup',
+      requiresApproval: true
+    });
+  });
+
+  test('uses fallback as the first machine action for frontend design when docs lookup is not installed', () => {
+    const plan = createRecommendationPlan({
+      workflow: 'frontend-design',
+      installedCapabilityIds: []
+    });
+
+    expect(plan.machine.nextActions[0]).toMatchObject({
+      type: 'use-fallback',
+      capabilityId: 'context7.docs-lookup',
+      requiresApproval: true
+    });
   });
 });
