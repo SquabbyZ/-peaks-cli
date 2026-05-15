@@ -144,4 +144,33 @@ describe('createProgram', () => {
     expect(output.ok).toBe(false);
     expect(output.code).toBe('UNSUPPORTED_NON_DRY_RUN');
   });
+
+  test('prints recommendation plan as JSON envelope', async () => {
+    const result = await runCommand(['recommend', '--workflow', 'code-refactor', '--language', 'zh-CN', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('recommend');
+    expect(JSON.stringify(output.data)).toContain('code-refactor');
+    expect(JSON.stringify(output.data)).toContain('zh-CN');
+  });
+
+  test('rejects unsupported recommendation workflow', async () => {
+    const result = await runCommand(['recommend', '--workflow', 'unknown', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_RECOMMENDATION_WORKFLOW');
+  });
+
+  test('prints capability status as JSON envelope', async () => {
+    const result = await runCommand(['capability', 'status', '--json']);
+    const output = parseJsonOutput(result.stdout);
+    const serializedData = JSON.stringify(output.data);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('capability.status');
+    expect(serializedData).toContain('everything-claude-code.code-review-agent');
+    expect(serializedData).toContain('"sources":[{"sourceId":"everything-claude-code"');
+  });
 });

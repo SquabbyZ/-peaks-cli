@@ -3,6 +3,9 @@ import { createArtifactInitPlan, getArtifactStatus, type ArtifactProvider } from
 import { runDoctor } from '../services/doctor/doctor-service.js';
 import { listProfiles } from '../services/profiles/profile-service.js';
 import { planProxyTest } from '../services/proxy/proxy-service.js';
+import { resolveCapabilityAvailability } from '../services/recommendations/capability-availability.js';
+import { createRecommendationPlan, type RecommendationWorkflow } from '../services/recommendations/recommendation-service.js';
+import { seedCapabilityItems, seedCapabilitySources } from '../services/recommendations/seed-capability-catalog.js';
 import { createRefactorDryRun, type RefactorMode } from '../services/refactor/refactor-service.js';
 import { listSkills } from '../services/skills/skill-registry.js';
 import { fail, getErrorMessage, ok, type ResultEnvelope } from '../shared/result.js';
@@ -42,6 +45,10 @@ function addJsonOption(command: Command): Command {
 function failUnsupportedNonDryRun(io: ProgramIO, command: string, asJson?: boolean): void {
   printResult(io, fail(command, 'UNSUPPORTED_NON_DRY_RUN', 'Only dry-run planning is supported', {}, ['Rerun with --dry-run or omit --no-dry-run']), asJson);
   process.exitCode = 1;
+}
+
+function isRecommendationWorkflow(value: string): value is RecommendationWorkflow {
+  return value === 'code-refactor' || value === 'product-refactor' || value === 'frontend-design';
 }
 
 const defaultIO: ProgramIO = {
@@ -167,6 +174,42 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
 
     const mode: RefactorMode = options.rd ? 'rd' : 'solo';
     printResult(io, ok('refactor', createRefactorDryRun(mode), [], ['This dry run never edits code']), options.json);
+  });
+
+  addJsonOption(
+    program
+      .command('recommend')
+      .description('Create a dry-run recommendation plan for a workflow')
+      .requiredOption('--workflow <workflow>', 'workflow: code-refactor, product-refactor, or frontend-design')
+      .option('--language <language>', 'human presentation language', 'en')
+  ).action((options: { workflow: string; language: string; json?: boolean }) => {
+    if (!isRecommendationWorkflow(options.workflow)) {
+      printResult(
+        io,
+        fail(
+          'recommend',
+          'UNSUPPORTED_RECOMMENDATION_WORKFLOW',
+          `Unsupported recommendation workflow ${options.workflow}`,
+          {},
+          ['Use --workflow code-refactor, product-refactor, or frontend-design']
+        ),
+        options.json
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    printResult(
+      io,
+      ok('recommend', createRecommendationPlan({ workflow: options.workflow, language: options.language })),
+      options.json
+    );
+  });
+
+  const capability = program.command('capability').description('Inspect Peaks capability catalog and runtime availability');
+  addJsonOption(capability.command('status').description('Show seed capability availability')).action((options: { json?: boolean }) => {
+    const availability = resolveCapabilityAvailability(seedCapabilityItems);
+    printResult(io, ok('capability.status', { sources: seedCapabilitySources, items: seedCapabilityItems, availability }), options.json);
   });
 
   return program;
