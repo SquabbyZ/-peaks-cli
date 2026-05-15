@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
+import { pathsEqual } from '../../src/shared/path-utils.js';
+import { isWindows } from '../../src/shared/platform.js';
+import { createSymlinkSync } from '../../src/shared/fs-utils.js';
 
 let currentWorkspace: WorkspaceConfig | null = null;
 
@@ -37,10 +40,11 @@ describe('guided artifact setup', () => {
   });
 
   test('reports configured workspace and artifact repo details', () => {
+    const testRoot = join(tmpdir(), `peaks-test-${Date.now()}`);
     currentWorkspace = {
       workspaceId: 'ws-artifacts',
       name: 'Artifacts Workspace',
-      rootPath: '/tmp/ws-artifacts',
+      rootPath: testRoot,
       artifactRepo: { provider: 'github', owner: 'acme', name: 'peaks-artifacts' },
       installedCapabilityIds: []
     };
@@ -50,11 +54,11 @@ describe('guided artifact setup', () => {
     expect(setup.validationResult.workspaceExists).toBe(true);
     expect(setup.validationResult.gitAvailable).toBe(true);
     expect(setup.workspaceId).toBe('ws-artifacts');
-    expect(setup.workspacePath).toBe('/tmp/ws-artifacts');
+    expect(setup.workspacePath).toBe(testRoot);
     expect(setup.provider).toBe('github');
     expect(setup.repoOwner).toBe('acme');
     expect(setup.repoName).toBe('peaks-artifacts');
-    expect(setup.localPath).toBe('/tmp/ws-artifacts/.peaks-artifacts');
+    expect(pathsEqual(setup.localPath, join(testRoot, '.peaks-artifacts'))).toBe(true);
     expect(setup.remoteUrl).toBe('https://github.com/acme/peaks-artifacts.git');
   });
 
