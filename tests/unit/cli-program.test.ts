@@ -22,7 +22,7 @@ async function runCommand(args: string[]) {
 }
 
 function parseJsonOutput(stdout: string[]) {
-  return JSON.parse(stdout.join('\n')) as { ok: boolean; command: string; data: unknown; code?: string };
+  return JSON.parse(stdout.join('\n')) as { ok: boolean; command: string; data: Record<string, unknown>; code?: string };
 }
 
 describe('createProgram', () => {

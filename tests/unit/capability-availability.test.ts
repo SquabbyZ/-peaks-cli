@@ -137,8 +137,8 @@ describe('resolveCapabilityAvailability', () => {
       status: 'installable',
       type: 'skill'
     });
-    expect(availability[0].installPlan).toBeDefined();
-    expect(availability[0].installPlan?.available).toBe(true);
+    expect(availability[0]?.installPlan).toBeDefined();
+    expect(availability[0]?.installPlan?.available).toBe(true);
   });
 
   test('handles multiple items with mixed availability', () => {
@@ -148,8 +148,8 @@ describe('resolveCapabilityAvailability', () => {
     );
 
     expect(availability).toHaveLength(3);
-    expect(availability[0].status).toBe('available');
-    expect(availability[1].status).toBe('installable');
-    expect(availability[2].status).toBe('unknown');
+    expect(availability[0]?.status).toBe('available');
+    expect(availability[1]?.status).toBe('installable');
+    expect(availability[2]?.status).toBe('unknown');
   });
 });
