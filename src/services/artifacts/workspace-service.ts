@@ -34,9 +34,15 @@ function getLocalArtifactPath(workspace: WorkspaceConfig): string {
 
 function getRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): string | null {
   if (!artifactRepo) return null;
-  return artifactRepo.provider === 'github'
+  const token = process.env.GH_TOKEN;
+  const baseUrl = artifactRepo.provider === 'github'
     ? `https://github.com/${artifactRepo.owner}/${artifactRepo.name}.git`
     : `https://gitlab.com/${artifactRepo.owner}/${artifactRepo.name}.git`;
+  if (token) {
+    const host = artifactRepo.provider === 'github' ? 'github.com' : 'gitlab.com';
+    return `https://x-access-token:${token}@${host}/${artifactRepo.owner}/${artifactRepo.name}.git`;
+  }
+  return baseUrl;
 }
 
 export async function executeArtifactSync(workspaceId?: string): Promise<SyncResult> {
