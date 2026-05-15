@@ -8,6 +8,7 @@ let currentWorkspace: WorkspaceConfig | null = null;
 let artifactSyncStatus: 'synced' | 'pending' | 'out-of-sync' | 'unknown' = 'pending';
 let commitHash = 'abc123def456';
 let gitCwd: string | undefined;
+let throwGitRevParse = false;
 
 vi.mock('../../src/services/config/config-service.js', () => ({
   getCurrentWorkspaceConfig: () => currentWorkspace,
@@ -32,6 +33,7 @@ vi.mock('node:child_process', () => ({
   execFileSync: (command: string, args: string[], options?: { cwd?: string }) => {
     if (command === 'git' && args[0] === 'rev-parse') {
       gitCwd = options?.cwd;
+      if (throwGitRevParse) throw new Error('not a git repo');
       return `${commitHash}\n`;
     }
     if (command === 'git' && args[0] === '--version') return 'git version 2.0.0';
@@ -48,16 +50,21 @@ const {
   validateArtifactRetention
 } = await import('../../src/services/sc/sc-service.js');
 
-function createWorkspace(provider: WorkspaceConfig['artifactRepo'] = { provider: 'github', owner: 'acme', name: 'artifact-repo' }): WorkspaceConfig {
+function createWorkspace(provider?: WorkspaceConfig['artifactRepo']): WorkspaceConfig {
   const rootPath = join(tmpdir(), `peaks-sc-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(rootPath, { recursive: true });
-  return {
+  const workspace = {
     workspaceId: 'ws-sc',
     name: 'SC Workspace',
     rootPath,
-    artifactRepo: provider ?? undefined,
     installedCapabilityIds: []
   };
+
+  return provider ? { ...workspace, artifactRepo: provider } : workspace;
+}
+
+function createWorkspaceWithRepo(provider: WorkspaceConfig['artifactRepo'] = { provider: 'github', owner: 'acme', name: 'artifact-repo' }): WorkspaceConfig {
+  return createWorkspace(provider);
 }
 
 function prepareChangeDir(workspace: WorkspaceConfig, changeId: string): string {
@@ -73,10 +80,11 @@ function prepareChangeDir(workspace: WorkspaceConfig, changeId: string): string 
 
 describe('peaks-sc service', () => {
   beforeEach(() => {
-    currentWorkspace = createWorkspace();
+    currentWorkspace = createWorkspaceWithRepo();
     artifactSyncStatus = 'pending';
     commitHash = 'abc123def456';
     gitCwd = undefined;
+    throwGitRevParse = false;
   });
 
   test('describes traceability status when no workspace is configured', () => {
@@ -86,6 +94,9 @@ describe('peaks-sc service', () => {
 
     expect(status.changeId).toBeNull();
     expect(status.hasArtifactRepo).toBe(false);
+    expect(status.artifactSyncStatus).toBe('unknown');
+    expect(status.localArtifactPath).toBe('.peaks-artifacts');
+    expect(status.requiredArtifacts.every((artifact) => artifact.exists)).toBe(false);
     expect(status.nextActions[0]).toContain('Add a workspace');
   });
 
@@ -149,6 +160,32 @@ describe('peaks-sc service', () => {
     expect(getChangeTraceabilityStatus().changeId).toBe('2026-05-15-symlink-change');
   });
 
+  test('returns null when current-change symlink is broken', () => {
+    const workspace = currentWorkspace as WorkspaceConfig;
+    const peaksPath = join(workspace.rootPath, '.peaks');
+    mkdirSync(peaksPath, { recursive: true });
+    symlinkSync(join('changes', 'missing-change'), join(peaksPath, 'current-change'));
+
+    expect(getChangeTraceabilityStatus().changeId).toBeNull();
+  });
+
+  test('ignores empty or unreadable current-change values', () => {
+    const workspace = currentWorkspace as WorkspaceConfig;
+    mkdirSync(join(workspace.rootPath, '.peaks'), { recursive: true });
+    writeFileSync(join(workspace.rootPath, '.peaks', 'current-change'), '   ', 'utf-8');
+
+    expect(getChangeTraceabilityStatus().changeId).toBeNull();
+  });
+
+  test('reports missing artifact repo configuration', () => {
+    currentWorkspace = createWorkspace(undefined);
+
+    const status = getChangeTraceabilityStatus();
+
+    expect(status.hasArtifactRepo).toBe(false);
+    expect(status.nextActions).toContain('Configure artifact repo: peaks config workspace add --id <id> --provider github --repo-owner <owner> --repo-name <name>');
+  });
+
   test('validates artifact retention by checking the requested slice directory', () => {
     const workspace = currentWorkspace as WorkspaceConfig;
     const currentChangeDir = prepareChangeDir(workspace, '2026-05-15-current');
@@ -204,5 +241,18 @@ describe('peaks-sc service', () => {
 
     artifactSyncStatus = 'out-of-sync';
     expect(recordCommitBoundary({ sliceId: 'slice-3' }).syncState).toBe('failed');
+  });
+
+  test('returns null commit data when workspace or git commit is unavailable', () => {
+    currentWorkspace = null;
+    const noWorkspaceBoundary = recordCommitBoundary({ sliceId: 'slice-no-workspace' });
+    expect(noWorkspaceBoundary.commitHash).toBeNull();
+    expect(noWorkspaceBoundary.rollbackPoint).toBeNull();
+
+    currentWorkspace = createWorkspaceWithRepo();
+    throwGitRevParse = true;
+    const noGitBoundary = recordCommitBoundary({ sliceId: 'slice-no-git' });
+    expect(noGitBoundary.commitHash).toBeNull();
+    expect(noGitBoundary.rollbackPoint).toBeNull();
   });
 });
