@@ -27,6 +27,8 @@ run_test "artifacts workspace status" "$PEAKS artifacts workspace --json"
 run_test "artifacts workspace status with workspace flag" "$PEAKS artifacts workspace --workspace ws1 --json"
 run_test "artifacts init GitHub" "$PEAKS artifacts init --provider github --name test-artifacts --json"
 run_test "artifacts init GitLab" "$PEAKS artifacts init --provider gitlab --name test-artifacts --json"
+run_test "artifacts setup guided" "$PEAKS artifacts setup --json"
+run_test "artifacts setup with step" "$PEAKS artifacts setup --step configure --json"
 
 # These should fail
 run_test "artifacts sync reject non-dry-run (should fail)" "! $PEAKS artifacts sync --workspace ws1 --no-dry-run --json"

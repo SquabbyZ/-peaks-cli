@@ -1,6 +1,14 @@
 import { Command } from 'commander';
-import { createArtifactInitPlan, getArtifactStatus, type ArtifactProvider } from '../services/artifacts/artifact-service.js';
+import { createArtifactInitPlan, getArtifactStatus, createGuidedArtifactSetup, type ArtifactProvider } from '../services/artifacts/artifact-service.js';
 import { getArtifactWorkspaceStatus, planArtifactSync } from '../services/artifacts/workspace-service.js';
+import {
+  getChangeTraceabilityStatus,
+  createChangeImpact,
+  createArtifactRetentionReport,
+  recordCommitBoundary,
+  validateArtifactRetention,
+  getScHelpText
+} from '../services/sc/sc-service.js';
 import { readConfig, getConfig, setConfig, addWorkspace, removeWorkspace, setCurrentWorkspace, type ConfigLayer } from '../services/config/config-service.js';
 import { runDoctor } from '../services/doctor/doctor-service.js';
 import { listProfiles } from '../services/profiles/profile-service.js';
@@ -51,6 +59,10 @@ function failUnsupportedNonDryRun(io: ProgramIO, command: string, asJson?: boole
 
 function isRecommendationWorkflow(value: string): value is RecommendationWorkflow {
   return value === 'code-refactor' || value === 'product-refactor' || value === 'frontend-design';
+}
+
+function multipleOption(value: string, previous: string[]): string[] {
+  return [...(previous || []), value];
 }
 
 const defaultIO: ProgramIO = {
@@ -169,6 +181,13 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
   });
   addJsonOption(artifacts.command('workspace').description('Show artifact workspace status for current or specified workspace').option('--workspace <id>', 'workspace identifier')).action((options: { workspace?: string; json?: boolean }) => {
     printResult(io, ok('artifacts.workspace', getArtifactWorkspaceStatus(options.workspace)), options.json);
+  });
+  addJsonOption(artifacts.command('setup').description('Interactive guided artifact repository setup').option('--step <step>', 'start from specific step: detect, configure, validate, complete')).action((options: { step?: string; json?: boolean }) => {
+    const setup = createGuidedArtifactSetup();
+    if (options.step) {
+      setup.step = options.step as 'detect' | 'configure' | 'validate' | 'complete';
+    }
+    printResult(io, ok('artifacts.setup', setup), options.json);
   });
 
   addJsonOption(
@@ -308,6 +327,79 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       printResult(io, fail('config.workspace.switch', 'WORKSPACE_NOT_FOUND', `Workspace ${options.id} not found`, {}, ['List workspaces with: peaks config workspace list']), options.json);
       process.exitCode = 1;
     }
+  });
+
+  const sc = program.command('sc').description('Source control and change traceability (peaks-sc integration)');
+  addJsonOption(sc.command('status').description('Show change traceability status')).action((options: { json?: boolean }) => {
+    printResult(io, ok('sc.status', getChangeTraceabilityStatus()), options.json);
+  });
+  addJsonOption(sc.command('help').description('Show peaks-sc help text')).action((options: { json?: boolean }) => {
+    const helpText = getScHelpText().join('\n');
+    if (options.json) {
+      printResult(io, ok('sc.help', { helpText }), options.json);
+    } else {
+      io.stdout(helpText);
+    }
+  });
+  addJsonOption(
+    sc
+      .command('impact')
+      .description('Generate change impact artifact')
+      .requiredOption('--change-id <id>', 'change identifier')
+      .option('--module <module>', 'affected module', multipleOption)
+      .option('--file <file>', 'affected file', multipleOption)
+  ).action((options: { changeId: string; module?: string[]; file?: string[]; json?: boolean }) => {
+    const impactOptions: { changeId: string; sourceArtifacts?: string[]; affectedModules?: string[]; affectedFiles?: string[] } = {
+      changeId: options.changeId
+    };
+    if (options.module) impactOptions.affectedModules = options.module;
+    if (options.file) impactOptions.affectedFiles = options.file;
+    const impact = createChangeImpact(impactOptions);
+    printResult(io, ok('sc.impact', impact), options.json);
+  });
+  addJsonOption(
+    sc
+      .command('retention')
+      .description('Create artifact retention report')
+      .requiredOption('--slice-id <id>', 'slice identifier')
+      .option('--prd <artifact>', 'PRD artifact path', multipleOption)
+      .option('--rd <artifact>', 'RD artifact path', multipleOption)
+      .option('--qa <artifact>', 'QA artifact path', multipleOption)
+      .option('--coverage <artifact>', 'coverage artifact path', multipleOption)
+      .option('--review <artifact>', 'review artifact path', multipleOption)
+      .option('--code <file>', 'code file path', multipleOption)
+  ).action((options: { sliceId: string; prd?: string[]; rd?: string[]; qa?: string[]; coverage?: string[]; review?: string[]; code?: string[]; json?: boolean }) => {
+    const reportOptions: { sliceId: string; prdArtifacts?: string[]; rdArtifacts?: string[]; qaArtifacts?: string[]; coverageArtifacts?: string[]; reviewArtifacts?: string[]; codeChanges?: string[] } = {
+      sliceId: options.sliceId
+    };
+    if (options.prd) reportOptions.prdArtifacts = options.prd;
+    if (options.rd) reportOptions.rdArtifacts = options.rd;
+    if (options.qa) reportOptions.qaArtifacts = options.qa;
+    if (options.coverage) reportOptions.coverageArtifacts = options.coverage;
+    if (options.review) reportOptions.reviewArtifacts = options.review;
+    if (options.code) reportOptions.codeChanges = options.code;
+    const report = createArtifactRetentionReport(reportOptions);
+    printResult(io, ok('sc.retention', report), options.json);
+  });
+  addJsonOption(sc.command('validate').description('Validate artifact retention for a slice').requiredOption('--slice-id <id>', 'slice identifier')).action((options: { sliceId: string; json?: boolean }) => {
+    const result = validateArtifactRetention(options.sliceId);
+    printResult(io, ok('sc.validate', result), options.json);
+  });
+  addJsonOption(
+    sc
+      .command('boundary')
+      .description('Record commit boundary for a slice')
+      .requiredOption('--slice-id <id>', 'slice identifier')
+      .option('--artifact <path>', 'artifact path', multipleOption)
+      .option('--code <file>', 'code file path', multipleOption)
+  ).action((options: { sliceId: string; artifact?: string[]; code?: string[]; json?: boolean }) => {
+    const boundaryOptions: { sliceId: string; artifacts?: string[]; codeFiles?: string[] } = {
+      sliceId: options.sliceId
+    };
+    if (options.artifact) boundaryOptions.artifacts = options.artifact;
+    if (options.code) boundaryOptions.codeFiles = options.code;
+    const boundary = recordCommitBoundary(boundaryOptions);
+    printResult(io, ok('sc.boundary', boundary), options.json);
   });
 
   return program;
