@@ -116,7 +116,8 @@ function isSecretKey(key: string): boolean {
 
 function isHttpsUrl(value: string): boolean {
   try {
-    return new URL(value).protocol === 'https:';
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.username.length === 0 && url.password.length === 0;
   } catch {
     return false;
   }
@@ -137,7 +138,7 @@ function getMiniMaxBaseUrlCandidate(key: string, value: unknown): unknown {
 
 function validateMiniMaxBaseUrl(value: unknown): void {
   if (value !== undefined && (typeof value !== 'string' || !isHttpsUrl(value))) {
-    throw new Error('MiniMax base URL must start with https://');
+    throw new Error('MiniMax base URL must be an HTTPS URL without embedded credentials');
   }
 }
 

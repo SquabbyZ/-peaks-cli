@@ -145,11 +145,12 @@ describe('secret config handling', () => {
   });
 
   test('rejects insecure MiniMax base URLs through all config write paths', () => {
-    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must start with https://');
-    expect(() => setConfig({ key: 'providers.minimax', value: { baseUrl: 'http://api.minimaxi.com/anthropic' } })).toThrow('MiniMax base URL must start with https://');
-    expect(() => setConfig({ key: 'providers', value: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } })).toThrow('MiniMax base URL must start with https://');
-    expect(() => writeConfig({ providers: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } }, 'user')).toThrow('MiniMax base URL must start with https://');
-    expect(() => setMiniMaxProviderConfig({ baseUrl: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must start with https://');
+    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax', value: { baseUrl: 'http://api.minimaxi.com/anthropic' } })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
+    expect(() => setConfig({ key: 'providers', value: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
+    expect(() => writeConfig({ providers: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } }, 'user')).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
+    expect(() => setMiniMaxProviderConfig({ baseUrl: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://user:pass@api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
 
     expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://api.minimaxi.com/anthropic' })).not.toThrow();
   });

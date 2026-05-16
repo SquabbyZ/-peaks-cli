@@ -14,6 +14,11 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => cliTestHome };
 });
 
+const minimaxSmokeTest = vi.hoisted(() => vi.fn());
+vi.mock('../../src/services/providers/minimax-provider-service.js', () => ({
+  testMiniMaxProvider: minimaxSmokeTest
+}));
+
 mkdirSync(join(cliTestHome, '.peaks'), { recursive: true });
 writeFileSync(join(cliTestHome, '.peaks', 'config.json'), JSON.stringify({ version: '0.1.0', currentWorkspace: null, workspaces: [], language: 'en', model: 'sonnet', tokens: {}, providers: {} }), 'utf8');
 
@@ -46,6 +51,7 @@ function parseJsonOutput<T = unknown>(stdout: string[]) {
 describe('createProgram', () => {
   beforeEach(() => {
     process.exitCode = undefined;
+    minimaxSmokeTest.mockReset();
   });
 
   test('prints skill list as JSON envelope', async () => {
@@ -449,6 +455,78 @@ describe('createProgram', () => {
     expect(statusResult.stdout.join('\n')).not.toContain(secret);
   });
 
+  test('config provider minimax test returns redacted smoke results', async () => {
+    const secret = 'peaks-cli-provider-smoke-secret';
+    const baseUrl = 'https://api.minimaxi.com/anthropic';
+    await runCommand(['config', 'provider', 'minimax', 'set', '--base-url', baseUrl, '--api-key', secret, '--json']);
+    minimaxSmokeTest.mockResolvedValue({
+      provider: 'minimax',
+      configured: true,
+      baseUrlConfigured: true,
+      apiKeyConfigured: true,
+      endpoint: `${baseUrl}/v1/messages`,
+      model: 'MiniMax-M2.7',
+      ok: true,
+      status: 200,
+      responseText: 'peaks-ok'
+    });
+
+    const result = await runCommand(['config', 'provider', 'minimax', 'test', '--json']);
+    const output = parseJsonOutput<{ ok: boolean; model: string; responseText: string }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('config.provider.minimax.test');
+    expect(output.data.model).toBe('MiniMax-M2.7');
+    expect(output.data.responseText).toBe('peaks-ok');
+    expect(result.stdout.join('\n')).not.toContain(secret);
+    expect(minimaxSmokeTest).toHaveBeenCalledWith({ baseUrl, apiKey: secret }, { model: 'MiniMax-M2.7' });
+  });
+
+  test('config provider minimax test reports unconfigured and failed smoke tests', async () => {
+    minimaxSmokeTest.mockResolvedValueOnce({
+      provider: 'minimax',
+      configured: false,
+      baseUrlConfigured: false,
+      apiKeyConfigured: false,
+      endpoint: '',
+      model: 'MiniMax-M2.7',
+      ok: false,
+      status: 0,
+      responseText: null
+    });
+    const unconfiguredResult = await runCommand(['config', 'provider', 'minimax', 'test', '--json']);
+    const unconfiguredOutput = parseJsonOutput(unconfiguredResult.stdout);
+    expect(unconfiguredOutput.ok).toBe(false);
+    expect(unconfiguredOutput.code).toBe('MINIMAX_PROVIDER_NOT_CONFIGURED');
+    expect(unconfiguredResult.exitCode).toBe(1);
+
+    minimaxSmokeTest.mockResolvedValueOnce({
+      provider: 'minimax',
+      configured: true,
+      baseUrlConfigured: true,
+      apiKeyConfigured: true,
+      endpoint: 'https://api.minimaxi.com/anthropic/v1/messages',
+      model: 'MiniMax-M2',
+      ok: false,
+      status: 401,
+      responseText: null
+    });
+    const failedResult = await runCommand(['config', 'provider', 'minimax', 'test', '--model', 'MiniMax-M2', '--json']);
+    const failedOutput = parseJsonOutput(failedResult.stdout);
+    expect(failedOutput.ok).toBe(false);
+    expect(failedOutput.code).toBe('MINIMAX_PROVIDER_TEST_FAILED');
+    expect(failedResult.exitCode).toBe(1);
+    expect(minimaxSmokeTest).toHaveBeenLastCalledWith(expect.any(Object), { model: 'MiniMax-M2' });
+
+    minimaxSmokeTest.mockRejectedValueOnce(new Error('network down with peaks-cli-provider-smoke-secret'));
+    const thrownResult = await runCommand(['config', 'provider', 'minimax', 'test', '--json']);
+    const thrownOutput = parseJsonOutput(thrownResult.stdout);
+    expect(thrownOutput.ok).toBe(false);
+    expect(thrownOutput.code).toBe('MINIMAX_PROVIDER_TEST_FAILED');
+    expect(thrownResult.exitCode).toBe(1);
+    expect(thrownResult.stdout.join('\n')).not.toContain('peaks-cli-provider-smoke-secret');
+  });
+
   test('config provider minimax validates inputs', async () => {
     const missingResult = await runCommand(['config', 'provider', 'minimax', 'set', '--json']);
     const missingOutput = parseJsonOutput(missingResult.stdout);
@@ -464,6 +542,12 @@ describe('createProgram', () => {
     const httpUrlOutput = parseJsonOutput(httpUrlResult.stdout);
     expect(httpUrlOutput.ok).toBe(false);
     expect(httpUrlOutput.code).toBe('INVALID_MINIMAX_BASE_URL');
+
+    const credentialUrlResult = await runCommand(['config', 'provider', 'minimax', 'set', '--base-url', 'https://user:pass@api.minimaxi.com/anthropic', '--json']);
+    const credentialUrlOutput = parseJsonOutput(credentialUrlResult.stdout);
+    expect(credentialUrlOutput.ok).toBe(false);
+    expect(credentialUrlOutput.code).toBe('INVALID_MINIMAX_BASE_URL');
+    expect(credentialUrlResult.stdout.join('\n')).not.toContain('user:pass');
   });
 
   test('config set enforces MiniMax HTTPS base URL validation', async () => {

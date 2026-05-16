@@ -17,6 +17,7 @@ import {
 } from '../services/sc/sc-service.js';
 import { listProfiles } from '../services/profiles/profile-service.js';
 import { planProxyTest } from '../services/proxy/proxy-service.js';
+import { testMiniMaxProvider } from '../services/providers/minimax-provider-service.js';
 import { resolveCapabilityAvailability } from '../services/recommendations/capability-availability.js';
 import { createRecommendationPlan, type RecommendationWorkflow } from '../services/recommendations/recommendation-service.js';
 import { seedCapabilityItems, seedCapabilitySources } from '../services/recommendations/seed-capability-catalog.js';
@@ -79,7 +80,8 @@ function isArtifactRepoSegment(value: string): boolean {
 
 function isHttpsUrl(value: string): boolean {
   try {
-    return new URL(value).protocol === 'https:';
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.username.length === 0 && url.password.length === 0;
   } catch {
     return false;
   }
@@ -539,8 +541,8 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
         process.exitCode = 1;
         return;
       }
-      if (getErrorMessage(error) === 'MiniMax base URL must start with https://') {
-        printResult(io, fail('config.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must start with https://', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
+      if (getErrorMessage(error) === 'MiniMax base URL must be an HTTPS URL without embedded credentials') {
+        printResult(io, fail('config.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must be an HTTPS URL without embedded credentials', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
         process.exitCode = 1;
         return;
       }
@@ -566,7 +568,7 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       return;
     }
     if (baseUrl && !isHttpsUrl(baseUrl)) {
-      printResult(io, fail('config.provider.minimax.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must start with https://', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
+      printResult(io, fail('config.provider.minimax.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must be an HTTPS URL without embedded credentials', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
       process.exitCode = 1;
       return;
     }
@@ -575,8 +577,8 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       const status = setMiniMaxProviderConfig({ ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) });
       printResult(io, ok('config.provider.minimax.set', status), options.json);
     } catch (error) {
-      if (getErrorMessage(error) === 'MiniMax base URL must start with https://') {
-        printResult(io, fail('config.provider.minimax.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must start with https://', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
+      if (getErrorMessage(error) === 'MiniMax base URL must be an HTTPS URL without embedded credentials') {
+        printResult(io, fail('config.provider.minimax.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must be an HTTPS URL without embedded credentials', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
         process.exitCode = 1;
         return;
       }
@@ -591,6 +593,23 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
   });
   addJsonOption(minimaxProvider.command('status').description('Show MiniMax provider configuration status')).action((options: { json?: boolean }) => {
     printResult(io, ok('config.provider.minimax.status', getMiniMaxProviderStatus()), options.json);
+  });
+  addJsonOption(minimaxProvider.command('test').description('Run a redacted MiniMax provider smoke test').option('--model <model>', 'model name for the smoke test', 'MiniMax-M2.7')).action(async (options: { model: string; json?: boolean }) => {
+    try {
+      const result = await testMiniMaxProvider(getMiniMaxProviderConfig(), { model: options.model });
+      if (!result.configured) {
+        printResult(io, fail('config.provider.minimax.test', 'MINIMAX_PROVIDER_NOT_CONFIGURED', 'MiniMax provider requires baseUrl and apiKey in user config', result, ['Run peaks config provider minimax set --base-url <url> --api-key <key>']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      printResult(io, result.ok ? ok('config.provider.minimax.test', result) : fail('config.provider.minimax.test', 'MINIMAX_PROVIDER_TEST_FAILED', 'MiniMax provider smoke test failed', result, ['Check the MiniMax base URL, API key, and model name']), options.json);
+      if (!result.ok) {
+        process.exitCode = 1;
+      }
+    } catch (error) {
+      printResult(io, fail('config.provider.minimax.test', 'MINIMAX_PROVIDER_TEST_FAILED', 'MiniMax provider smoke test failed', {}, ['Check network connectivity and MiniMax provider settings']), options.json);
+      process.exitCode = 1;
+    }
   });
 
   const configWorkspace = config.command('workspace').description('Manage workspaces');
