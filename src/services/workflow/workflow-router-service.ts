@@ -27,7 +27,7 @@ export type WorkflowRouterStep = {
   readonly owner: WorkflowStepOwner;
   readonly modelTier: ModelTier;
   readonly modelRole: ModelRole;
-  readonly modelId: string;
+  readonly modelId: typeof STRONGEST_MODEL_ID | typeof EXECUTION_MODEL_ID;
   readonly reason: string;
   readonly dryRunOnly: true;
   readonly invokesAgents: false;
@@ -46,6 +46,14 @@ export type WorkflowModelRouting = {
   };
 };
 
+export type WorkflowModelAssignment = {
+  readonly stage: WorkflowStepStage;
+  readonly owner: WorkflowStepOwner;
+  readonly modelTier: ModelTier;
+  readonly modelRole: ModelRole;
+  readonly modelId: typeof STRONGEST_MODEL_ID | typeof EXECUTION_MODEL_ID;
+};
+
 export type WorkflowRouterPlan = {
   readonly changeId: string;
   readonly goal: string;
@@ -53,6 +61,7 @@ export type WorkflowRouterPlan = {
   readonly dryRun: true;
   readonly routePolicy: WorkflowRoutePolicy;
   readonly modelRouting: WorkflowModelRouting;
+  readonly modelAssignments: readonly WorkflowModelAssignment[];
   readonly techStatus: TechStatus;
   readonly techPlan: TechPlanResult;
   readonly rdPlan: RdPlanResult;
@@ -147,6 +156,16 @@ function createModelRouting(steps: readonly WorkflowRouterStep[]): WorkflowModel
   };
 }
 
+function createModelAssignments(steps: readonly WorkflowRouterStep[]): WorkflowModelAssignment[] {
+  return steps.map((step) => ({
+    stage: step.stage,
+    owner: step.owner,
+    modelTier: step.modelTier,
+    modelRole: step.modelRole,
+    modelId: step.modelId
+  }));
+}
+
 function getTechPlanBlockedReasons(techPlan: TechPlanResult): string[] {
   return techPlan.available ? techPlan.blockedReasons : techPlan.preview.blockedReasons;
 }
@@ -184,6 +203,7 @@ export function createWorkflowRouterPlan(request: WorkflowRouterRequest): Workfl
     dryRun: true,
     routePolicy: request.mode === 'solo' ? 'solo-broad-multi-model' : 'team-rd-limited-multi-model',
     modelRouting: createModelRouting(steps),
+    modelAssignments: createModelAssignments(steps),
     techStatus,
     techPlan,
     rdPlan,

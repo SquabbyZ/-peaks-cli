@@ -81,6 +81,7 @@ export type AutonomousWorkflowPlan = {
   readonly goalCommand: AutonomousGoalCommand;
   readonly capabilityPlan: AutonomousCapabilityPlan;
   readonly routePlan: WorkflowRouterPlan;
+  readonly modelAssignments: WorkflowRouterPlan['modelAssignments'];
   readonly rdPlan: RdPlanResult;
   readonly resumePlan: AutonomousResumePlan;
   readonly constraints: readonly string[];
@@ -262,6 +263,7 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     goalCommand: createGoalCommand(goalPackage),
     capabilityPlan: createCapabilityPlan(),
     routePlan,
+    modelAssignments: routePlan.modelAssignments,
     rdPlan,
     resumePlan: createResumePlan(request.changeId, ready),
     constraints: [...AUTONOMOUS_CONSTRAINTS],

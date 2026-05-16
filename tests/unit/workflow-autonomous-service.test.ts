@@ -71,6 +71,9 @@ describe('createAutonomousWorkflowPlan', () => {
     expect(plan.constraints).toContain('do-not-launch-workers');
     expect(plan.goalCommand.durable).toBe(false);
     expect(plan.goalCommand.command).toContain('/goal');
+    expect(plan.modelAssignments).toEqual(plan.routePlan.modelAssignments);
+    expect(plan.modelAssignments.filter((assignment) => assignment.modelRole === 'execution').map((assignment) => assignment.modelId)).toEqual(['minimax-2.7', 'minimax-2.7']);
+    expect(plan.modelAssignments.filter((assignment) => assignment.modelRole === 'strongest').every((assignment) => assignment.modelId === 'claude-opus-4-7')).toBe(true);
   });
 
   test('models curated accessRepo and mcpServer capabilities without activation', () => {

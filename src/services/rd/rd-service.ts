@@ -8,6 +8,10 @@ import { getTechStatus, TECH_REQUIRED_ARTIFACTS } from '../tech/tech-service.js'
 
 export type RdSkill = 'rd';
 export type RdWaveName = 'discovery' | 'planning' | 'implementation candidates' | 'quality gates' | 'reducer';
+export type RdModelRole = 'strongest' | 'execution';
+
+const STRONGEST_MODEL_ID = 'claude-opus-4-7' as const;
+const EXECUTION_MODEL_ID = 'minimax-2.7' as const;
 
 export type RdSwarmPlanRequest = {
   skill: RdSkill;
@@ -25,6 +29,8 @@ export type RdTask = {
   wave: RdWaveName;
   workerKind: string;
   purpose: string;
+  modelRole: RdModelRole;
+  modelId: typeof STRONGEST_MODEL_ID | typeof EXECUTION_MODEL_ID;
   inputs: string[];
   outputs: [string, ...string[]];
   dependsOn: string[];
@@ -183,6 +189,14 @@ function selectConcreteTargetArea(targetAreas: [string, ...string[]], index: num
   return targetAreas[index % targetAreas.length] as string;
 }
 
+function getTaskModelRole(wave: RdWaveName): RdModelRole {
+  return wave === 'implementation candidates' ? 'execution' : 'strongest';
+}
+
+function getTaskModelId(modelRole: RdModelRole): typeof STRONGEST_MODEL_ID | typeof EXECUTION_MODEL_ID {
+  return modelRole === 'execution' ? EXECUTION_MODEL_ID : STRONGEST_MODEL_ID;
+}
+
 const MAX_ARTIFACT_BYTES = 256_000;
 
 function readArtifactFile(rootPath: string, artifactWorkspacePath: string, artifact: string): string | null {
@@ -316,11 +330,14 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
     const targetArea = wave === 'implementation candidates' && hasConcreteTargetAreas(concreteTargetAreas)
       ? selectConcreteTargetArea(concreteTargetAreas, implementationIndex)
       : `area-${wave}`;
+    const modelRole = getTaskModelRole(wave);
     return {
       taskId,
       wave,
       workerKind: taskId,
       purpose: `${taskId.replace(/^rd-/, '').replace(/-/g, ' ')} for ${goal}`,
+      modelRole,
+      modelId: getTaskModelId(modelRole),
       inputs: [goal, artifactRoot],
       outputs: [briefPath] as [string, ...string[]],
       dependsOn: [...waveDependencies[wave]],

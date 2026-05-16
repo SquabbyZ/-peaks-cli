@@ -60,6 +60,8 @@ describe('createWorkflowRouterPlan', () => {
     expect(plan.steps.find((step) => step.stage === 'coding-execution')?.modelId).toBe('minimax-2.7');
     expect(plan.steps.find((step) => step.stage === 'unit-test-execution')?.modelId).toBe('minimax-2.7');
     expect(plan.steps.find((step) => step.stage === 'quality-review')?.modelId).toBe('claude-opus-4-7');
+    expect(plan.modelAssignments).toEqual(plan.steps.map((step) => ({ stage: step.stage, owner: step.owner, modelTier: step.modelTier, modelRole: step.modelRole, modelId: step.modelId })));
+    expect(plan.modelAssignments.filter((assignment) => assignment.modelRole === 'execution').map((assignment) => assignment.stage)).toEqual(['coding-execution', 'unit-test-execution']);
   });
 
   test('keeps missing artifact workspace as a preview-safe planning constraint', () => {

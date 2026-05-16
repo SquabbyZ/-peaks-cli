@@ -59,6 +59,8 @@ describe('createRdSwarmPlan', () => {
       expect(task.taskId.startsWith('rd-')).toBe(true);
       expect(task.workerKind.length).toBeGreaterThan(0);
       expect(task.purpose).toContain('Implement approved checkout refactor');
+      expect(task.modelRole).toBe(task.wave === 'implementation candidates' ? 'execution' : 'strongest');
+      expect(task.modelId).toBe(task.wave === 'implementation candidates' ? 'minimax-2.7' : 'claude-opus-4-7');
       expect(task.inputs.length).toBeGreaterThan(0);
       expect(task.outputs.every((output) => output.startsWith('.peaks/changes/checkout-refactor/swarm/'))).toBe(true);
       expect(task.outputs.every((output) => !output.includes('\\'))).toBe(true);
@@ -106,6 +108,8 @@ describe('createRdSwarmPlan', () => {
     expect(targetAreas).not.toContain('packages/client/src/forbidden.ts');
     expect(targetAreas).not.toContain('area-1');
     expect(targetAreas).not.toContain('area-2');
+    expect(plan.tasks.filter((task) => task.wave === 'implementation candidates').every((task) => task.modelRole === 'execution' && task.modelId === 'minimax-2.7')).toBe(true);
+    expect(plan.tasks.filter((task) => task.wave === 'quality gates' || task.wave === 'reducer').every((task) => task.modelRole === 'strongest' && task.modelId === 'claude-opus-4-7')).toBe(true);
   });
 
   test('ignores empty implementation target area sections', () => {
