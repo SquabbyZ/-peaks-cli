@@ -2,7 +2,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, relative, resolve } from 'node:path';
 import { getCurrentWorkspaceConfig } from '../config/config-service.js';
-import { getArtifactWorkspaceStatus } from '../artifacts/workspace-service.js';
+import { getArtifactWorkspaceStatus, getLocalArtifactPath } from '../artifacts/workspace-service.js';
 
 export type ChangeImpact = {
   changeId: string;
@@ -188,7 +188,7 @@ export function getChangeTraceabilityStatus(): ChangeTraceabilityStatus {
     changeId,
     hasArtifactRepo,
     artifactSyncStatus: artifactStatus.syncStatus,
-    localArtifactPath: artifactStatus.localPath,
+    localArtifactPath: getLocalArtifactPath(workspace),
     requiredArtifacts,
     nextActions
   };
@@ -220,7 +220,7 @@ export function createChangeImpact(options: {
     syncPointers: {
       artifactRepo: getArtifactRepoUrl(artifactRepo ?? undefined),
       lastSync: null,
-      localPath: workspace ? resolve(workspace.rootPath, '.peaks-artifacts') : '.peaks-artifacts'
+      localPath: workspace ? getLocalArtifactPath(workspace) : '.peaks-artifacts'
     }
   };
 }

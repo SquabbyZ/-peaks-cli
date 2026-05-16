@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
@@ -56,7 +56,7 @@ describe('guided artifact setup', () => {
     expect(setup.provider).toBe('github');
     expect(setup.repoOwner).toBe('acme');
     expect(setup.repoName).toBe('peaks-artifacts');
-    expect(pathsEqual(setup.localPath, join(testRoot, '.peaks-artifacts'))).toBe(true);
+    expect(pathsEqual(setup.localPath, join(dirname(testRoot), `${basename(testRoot)}.peaks-artifacts`))).toBe(true);
     expect(setup.remoteUrl).toBe('https://github.com/acme/peaks-artifacts.git');
   });
 

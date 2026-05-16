@@ -14,9 +14,10 @@ vi.mock('../../src/services/config/config-service.js', () => ({
 }));
 
 vi.mock('../../src/services/artifacts/workspace-service.js', () => ({
+  getLocalArtifactPath: (workspace: WorkspaceConfig) => `${workspace.rootPath}.peaks-artifacts`,
   getArtifactWorkspaceStatus: () => ({
     workspaceId: currentWorkspace?.workspaceId ?? 'unknown',
-    localPath: currentWorkspace ? `${currentWorkspace.rootPath}/.peaks-artifacts` : '.peaks-artifacts',
+    localPath: currentWorkspace ? `${currentWorkspace.rootPath}.peaks-artifacts` : '.peaks-artifacts',
     configured: Boolean(currentWorkspace?.artifactRepo),
     syncStatus: 'pending',
     lastSync: null,

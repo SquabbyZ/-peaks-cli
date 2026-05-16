@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { getCurrentWorkspaceConfig } from '../config/config-service.js';
+import { getLocalArtifactPath } from './workspace-service.js';
 
 export type ArtifactProvider = 'github' | 'gitlab';
 
@@ -93,7 +94,7 @@ export function createGuidedArtifactSetup(): GuidedArtifactSetup {
     sshKeyAvailable: hasSshKey()
   };
 
-  const localPath = workspace ? resolve(workspace.rootPath, '.peaks-artifacts') : '.peaks-artifacts';
+  const localPath = workspace ? getLocalArtifactPath(workspace) : '.peaks-artifacts';
   const remoteUrl = getRemoteUrl(artifactRepo ?? undefined);
 
   return {

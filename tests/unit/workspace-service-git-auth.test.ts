@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
 
@@ -53,7 +53,7 @@ describe('executeArtifactSync git auth', () => {
     expect(result.commands.join('\n')).not.toContain('secret-token');
     expect(execCalls[0]).toMatchObject({
       command: 'git',
-      args: ['clone', 'https://github.com/acme/artifact-repo.git', join((currentWorkspace as WorkspaceConfig).rootPath, '.peaks-artifacts')]
+      args: ['clone', 'https://github.com/acme/artifact-repo.git', join(dirname((currentWorkspace as WorkspaceConfig).rootPath), `${basename((currentWorkspace as WorkspaceConfig).rootPath)}.peaks-artifacts`)]
     });
     expect(execCalls[0]?.env?.GIT_CONFIG_COUNT).toBe('1');
     expect(execCalls[0]?.env?.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraheader');

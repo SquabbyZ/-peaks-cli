@@ -1,6 +1,12 @@
 import { Command } from 'commander';
-import { createArtifactInitPlan, getArtifactStatus, createGuidedArtifactSetup, type ArtifactProvider } from '../services/artifacts/artifact-service.js';
-import { getArtifactWorkspaceStatus, planArtifactSync } from '../services/artifacts/workspace-service.js';
+import { createArtifactInitPlan, getArtifactStatus, createGuidedArtifactSetup, type ArtifactProvider, type GuidedArtifactSetup } from '../services/artifacts/artifact-service.js';
+import { getArtifactWorkspaceStatus, getLocalArtifactPath, planArtifactSync } from '../services/artifacts/workspace-service.js';
+import { getCurrentWorkspaceConfig, readConfig, getConfig, setConfig, addWorkspace, removeWorkspace, setCurrentWorkspace, getMiniMaxProviderConfig, getMiniMaxProviderStatus, setMiniMaxProviderConfig, isConfigLayer, isSensitiveConfigPath, redactConfigSecrets, type ConfigLayer } from '../services/config/config-service.js';
+import { runDoctor } from '../services/doctor/doctor-service.js';
+import { createRdSwarmPlan } from '../services/rd/rd-service.js';
+import { createTechPlan, getTechStatus } from '../services/tech/tech-service.js';
+import { createWorkflowRouterPlan, isWorkflowMode } from '../services/workflow/workflow-router-service.js';
+import { createAutonomousWorkflowPlan } from '../services/workflow/workflow-autonomous-service.js';
 import {
   getChangeTraceabilityStatus,
   createChangeImpact,
@@ -9,8 +15,6 @@ import {
   validateArtifactRetention,
   getScHelpText
 } from '../services/sc/sc-service.js';
-import { readConfig, getConfig, setConfig, addWorkspace, removeWorkspace, setCurrentWorkspace, type ConfigLayer } from '../services/config/config-service.js';
-import { runDoctor } from '../services/doctor/doctor-service.js';
 import { listProfiles } from '../services/profiles/profile-service.js';
 import { planProxyTest } from '../services/proxy/proxy-service.js';
 import { resolveCapabilityAvailability } from '../services/recommendations/capability-availability.js';
@@ -59,6 +63,38 @@ function failUnsupportedNonDryRun(io: ProgramIO, command: string, asJson?: boole
 
 function isRecommendationWorkflow(value: string): value is RecommendationWorkflow {
   return value === 'code-refactor' || value === 'product-refactor' || value === 'frontend-design';
+}
+
+function isArtifactProvider(value: string): value is ArtifactProvider {
+  return value === 'github' || value === 'gitlab';
+}
+
+function isArtifactSetupStep(value: string): value is GuidedArtifactSetup['step'] {
+  return value === 'detect' || value === 'configure' || value === 'validate' || value === 'complete';
+}
+
+function isArtifactRepoSegment(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && !value.includes('..') && !value.endsWith('.');
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function parseConfigLayer(value: string | undefined): ConfigLayer | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  return isConfigLayer(value) ? value : null;
+}
+
+function printInvalidConfigLayer(io: ProgramIO, command: string, asJson?: boolean): void {
+  printResult(io, fail(command, 'INVALID_CONFIG_LAYER', 'Config layer must be user or project', {}, ['Use --layer user or --layer project']), asJson);
+  process.exitCode = 1;
 }
 
 function multipleOption(value: string, previous: string[]): string[] {
@@ -152,14 +188,14 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       return;
     }
 
-    if (options.provider !== 'github' && options.provider !== 'gitlab') {
+    if (!isArtifactProvider(options.provider)) {
       printResult(io, fail('artifacts.init', 'UNSUPPORTED_ARTIFACT_PROVIDER', `Unsupported provider ${options.provider}`, {}, ['Use --provider github or --provider gitlab']), options.json);
       process.exitCode = 1;
       return;
     }
 
     printResult(io, ok('artifacts.init', createArtifactInitPlan({
-      provider: options.provider as ArtifactProvider,
+      provider: options.provider,
       name: options.name,
       localPath: options.path,
       dryRun: options.dryRun ?? true
@@ -183,17 +219,18 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
     printResult(io, ok('artifacts.workspace', getArtifactWorkspaceStatus(options.workspace)), options.json);
   });
   addJsonOption(artifacts.command('setup').description('Interactive guided artifact repository setup').option('--step <step>', 'start from specific step: detect, configure, validate, complete')).action((options: { step?: string; json?: boolean }) => {
-    const validSteps = ['detect', 'configure', 'validate', 'complete'] as const;
-    if (options.step && !validSteps.includes(options.step as (typeof validSteps)[number])) {
-      printResult(io, fail('artifacts.setup', 'INVALID_ARTIFACT_SETUP_STEP', `Invalid artifact setup step ${options.step}`, {}, ['Use one of: detect, configure, validate, complete']), options.json);
-      process.exitCode = 1;
-      return;
+    const requestedStep = options.step;
+    const setup = createGuidedArtifactSetup();
+
+    if (requestedStep) {
+      if (!isArtifactSetupStep(requestedStep)) {
+        printResult(io, fail('artifacts.setup', 'INVALID_ARTIFACT_SETUP_STEP', `Invalid artifact setup step ${requestedStep}`, {}, ['Use one of: detect, configure, validate, complete']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      setup.step = requestedStep;
     }
 
-    const setup = createGuidedArtifactSetup();
-    if (options.step) {
-      setup.step = options.step as 'detect' | 'configure' | 'validate' | 'complete';
-    }
     printResult(io, ok('artifacts.setup', setup), options.json);
   });
 
@@ -219,6 +256,200 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
 
     const mode: RefactorMode = options.rd ? 'rd' : 'solo';
     printResult(io, ok('refactor', createRefactorDryRun(mode), [], ['This dry run never edits code']), options.json);
+  });
+
+  const tech = program.command('tech').description('Plan and inspect technical dry-run gates');
+  addJsonOption(
+    tech
+      .command('plan')
+      .description('Generate a technical dry-run graph')
+      .requiredOption('--change-id <id>', 'change identifier')
+      .requiredOption('--goal <goal>', 'planning goal')
+      .option('--swarm', 'opt into swarm-oriented planning', true)
+      .option('--dry-run', 'preview without writing files', true)
+      .option('--no-dry-run', 'unsupported: do not execute tech planning from this CLI')
+  ).action((options: { changeId: string; goal: string; swarm?: boolean; dryRun?: boolean; json?: boolean }) => {
+    if (options.dryRun === false) {
+      failUnsupportedNonDryRun(io, 'tech.plan', options.json);
+      return;
+    }
+
+    try {
+      const workspace = getCurrentWorkspaceConfig();
+      const artifactWorkspacePath = workspace ? getLocalArtifactPath(workspace) : undefined;
+      const plan = createTechPlan({
+        changeId: options.changeId,
+        goal: options.goal,
+        swarm: options.swarm ?? true,
+        dryRun: true,
+        ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}),
+        ...(workspace ? { workspace } : {}),
+      });
+      printResult(io, ok('tech.plan', plan), options.json);
+    } catch (error) {
+      printResult(io, fail('tech.plan', 'INVALID_CHANGE_ID_OR_GOAL', getErrorMessage(error), {}, ['Use a safe change id and a non-empty goal']), options.json);
+      process.exitCode = 1;
+    }
+  });
+  addJsonOption(
+    tech
+      .command('status')
+      .description('Inspect technical approval status')
+      .requiredOption('--change-id <id>', 'change identifier')
+  ).action((options: { changeId: string; json?: boolean }) => {
+    try {
+      const workspace = getCurrentWorkspaceConfig();
+      const artifactWorkspacePath = workspace ? getLocalArtifactPath(workspace) : undefined;
+      printResult(io, ok('tech.status', getTechStatus({ changeId: options.changeId, ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}), ...(workspace ? { workspace } : {}) })), options.json);
+    } catch (error) {
+      printResult(io, fail('tech.status', 'INVALID_CHANGE_ID', getErrorMessage(error), {}, ['Use a safe change id']), options.json);
+      process.exitCode = 1;
+    }
+  });
+
+  const workflow = program.command('workflow').description('Plan workflow routing dry-run graphs');
+  addJsonOption(
+    workflow
+      .command('route')
+      .description('Generate a workflow routing dry-run plan')
+      .requiredOption('--mode <mode>', 'workflow mode: solo or team')
+      .requiredOption('--change-id <id>', 'change identifier')
+      .requiredOption('--goal <goal>', 'planning goal')
+      .option('--max-workers <count>', 'maximum worker count', '40')
+      .option('--dry-run', 'preview without writing files', true)
+      .option('--no-dry-run', 'unsupported: do not execute workflow routing from this CLI')
+  ).action((options: { mode: string; changeId: string; goal: string; maxWorkers: string; dryRun?: boolean; json?: boolean }) => {
+    if (options.dryRun === false) {
+      failUnsupportedNonDryRun(io, 'workflow.route', options.json);
+      return;
+    }
+
+    if (!isWorkflowMode(options.mode)) {
+      printResult(io, fail('workflow.route', 'UNSUPPORTED_WORKFLOW_MODE', `Unsupported workflow mode ${options.mode}`, {}, ['Use --mode solo or --mode team']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const maxWorkers = Number(options.maxWorkers);
+      if (!Number.isInteger(maxWorkers) || maxWorkers < 1) {
+        printResult(io, fail('workflow.route', 'INVALID_MAX_WORKERS', 'max-workers must be a positive integer', {}, ['Use --max-workers with a positive integer value']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+
+      const workspace = getCurrentWorkspaceConfig();
+      const artifactWorkspacePath = workspace ? getLocalArtifactPath(workspace) : undefined;
+      const plan = createWorkflowRouterPlan({
+        changeId: options.changeId,
+        goal: options.goal,
+        mode: options.mode,
+        maxWorkers,
+        dryRun: true,
+        ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}),
+        ...(workspace ? { workspace } : {})
+      });
+      printResult(io, ok('workflow.route', plan), options.json);
+    } catch (error) {
+      printResult(io, fail('workflow.route', 'INVALID_CHANGE_ID_OR_GOAL', getErrorMessage(error), {}, ['Use a safe change id and a non-empty goal']), options.json);
+      process.exitCode = 1;
+    }
+  });
+  addJsonOption(
+    workflow
+      .command('autonomous')
+      .description('Generate an autonomous workflow dry-run plan')
+      .requiredOption('--mode <mode>', 'workflow mode: solo or team')
+      .requiredOption('--change-id <id>', 'change identifier')
+      .requiredOption('--goal <goal>', 'planning goal')
+      .option('--max-workers <count>', 'maximum worker count', '40')
+      .option('--dry-run', 'preview without writing files', true)
+      .option('--no-dry-run', 'unsupported: do not execute autonomous workflow planning from this CLI')
+  ).action((options: { mode: string; changeId: string; goal: string; maxWorkers: string; dryRun?: boolean; json?: boolean }) => {
+    if (options.dryRun === false) {
+      failUnsupportedNonDryRun(io, 'workflow.autonomous', options.json);
+      return;
+    }
+
+    if (!isWorkflowMode(options.mode)) {
+      printResult(io, fail('workflow.autonomous', 'UNSUPPORTED_WORKFLOW_MODE', `Unsupported workflow mode ${options.mode}`, {}, ['Use --mode solo or --mode team']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const maxWorkers = Number(options.maxWorkers);
+      if (!Number.isInteger(maxWorkers) || maxWorkers < 1) {
+        printResult(io, fail('workflow.autonomous', 'INVALID_MAX_WORKERS', 'max-workers must be a positive integer', {}, ['Use --max-workers with a positive integer value']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+
+      const workspace = getCurrentWorkspaceConfig();
+      const artifactWorkspacePath = workspace ? getLocalArtifactPath(workspace) : undefined;
+      const plan = createAutonomousWorkflowPlan({
+        changeId: options.changeId,
+        goal: options.goal,
+        mode: options.mode,
+        maxWorkers,
+        dryRun: true,
+        ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}),
+        ...(workspace ? { workspace } : {})
+      });
+      printResult(io, ok('workflow.autonomous', plan), options.json);
+    } catch (error) {
+      printResult(io, fail('workflow.autonomous', 'INVALID_CHANGE_ID_OR_GOAL', getErrorMessage(error), {}, ['Use a safe change id and a non-empty goal']), options.json);
+      process.exitCode = 1;
+    }
+  });
+
+  const swarm = program.command('swarm').description('Plan RD swarm dry-run graphs');
+  addJsonOption(
+    swarm
+      .command('plan')
+      .description('Generate an RD swarm dry-run graph')
+      .requiredOption('--skill <skill>', 'skill to plan for')
+      .requiredOption('--change-id <id>', 'change identifier')
+      .requiredOption('--goal <goal>', 'planning goal')
+      .option('--max-workers <count>', 'maximum worker count', '40')
+      .option('--dry-run', 'preview without writing files', true)
+      .option('--no-dry-run', 'unsupported: do not execute RD planning from this CLI')
+  ).action((options: { skill: string; changeId: string; goal: string; maxWorkers: string; dryRun?: boolean; json?: boolean }) => {
+    if (options.skill !== 'rd') {
+      printResult(io, fail('swarm.plan', 'UNSUPPORTED_SWARM_SKILL', `Unsupported skill ${options.skill}`, {}, ['Use --skill rd']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (options.dryRun === false) {
+      failUnsupportedNonDryRun(io, 'swarm.plan', options.json);
+      return;
+    }
+
+    try {
+      const maxWorkers = Number(options.maxWorkers);
+      if (!Number.isInteger(maxWorkers) || maxWorkers < 1) {
+        printResult(io, fail('swarm.plan', 'INVALID_MAX_WORKERS', 'max-workers must be a positive integer', {}, ['Use --max-workers with a positive integer value']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+
+      const workspace = getCurrentWorkspaceConfig();
+      const artifactWorkspacePath = workspace ? getLocalArtifactPath(workspace) : undefined;
+      const plan = createRdSwarmPlan({
+        skill: 'rd',
+        changeId: options.changeId,
+        goal: options.goal,
+        maxWorkers,
+        dryRun: true,
+        ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}),
+        ...(workspace ? { workspace } : {}),
+      });
+      printResult(io, ok('swarm.plan', plan), options.json);
+    } catch (error) {
+      printResult(io, fail('swarm.plan', 'INVALID_CHANGE_ID_OR_GOAL', getErrorMessage(error), {}, ['Use a safe change id and a non-empty goal']), options.json);
+      process.exitCode = 1;
+    }
   });
 
   addJsonOption(
@@ -258,11 +489,17 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
   });
 
   const config = program.command('config').description('Manage Peaks configuration');
-  addJsonOption(config.command('get').description('Get current config or a specific key').option('--key <path>', 'dot-notation key path').option('--layer <layer>', 'user or project')).action((options: { key?: string; layer?: ConfigLayer; json?: boolean }) => {
+  addJsonOption(config.command('get').description('Get current config or a specific key').option('--key <path>', 'dot-notation key path').option('--layer <layer>', 'user or project')).action((options: { key?: string; layer?: string; json?: boolean }) => {
+    const layer = parseConfigLayer(options.layer);
+    if (layer === null) {
+      printInvalidConfigLayer(io, 'config.get', options.json);
+      return;
+    }
     const getOpts: { key?: string; layer?: ConfigLayer } = {};
+    if (layer !== undefined) getOpts.layer = layer;
     if (options.key !== undefined) getOpts.key = options.key;
-    if (options.layer !== undefined) getOpts.layer = options.layer;
-    printResult(io, ok('config.get', getConfig(getOpts)), options.json);
+    const value = getConfig(getOpts);
+    printResult(io, ok('config.get', options.key !== undefined && isSensitiveConfigPath(options.key) ? '***' : redactConfigSecrets(value)), options.json);
   });
   addJsonOption(
     config
@@ -271,15 +508,89 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       .requiredOption('--key <path>', 'dot-notation key path')
       .requiredOption('--value <json>', 'JSON value')
       .option('--layer <layer>', 'user or project', 'user')
-  ).action((options: { key: string; value: string; layer?: ConfigLayer; json?: boolean }) => {
+  ).action((options: { key: string; value: string; layer?: string; json?: boolean }) => {
+    const parsedLayer = parseConfigLayer(options.layer);
+    if (parsedLayer === null) {
+      printInvalidConfigLayer(io, 'config.set', options.json);
+      return;
+    }
+    const layer = parsedLayer ?? 'user';
+
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(options.value);
-      setConfig({ key: options.key, value: parsed, layer: options.layer ?? 'user' });
-      printResult(io, ok('config.set', { key: options.key, value: parsed }), options.json);
+      parsed = JSON.parse(options.value);
     } catch {
-      printResult(io, fail('config.set', 'INVALID_JSON', `Could not parse value as JSON: ${options.value}`, {}, ['Use valid JSON: --value \'{"key":"value"}\'']), options.json);
+      printResult(io, fail('config.set', 'INVALID_JSON', 'Could not parse value as JSON', {}, ['Use valid JSON: --value \'{"key":"value"}\'']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      setConfig({ key: options.key, value: parsed, layer });
+      printResult(io, ok('config.set', { key: options.key, value: isSensitiveConfigPath(options.key) ? '***' : redactConfigSecrets(parsed) }), options.json);
+    } catch (error) {
+      if (getErrorMessage(error) === 'Sensitive config keys must be stored in the user config layer') {
+        printResult(io, fail('config.set', 'SECRET_CONFIG_REQUIRES_USER_LAYER', 'Sensitive config keys must be stored in the user config layer', {}, ['Use --layer user or peaks config provider minimax set']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      if (getErrorMessage(error) === 'Project config not found') {
+        printResult(io, fail('config.set', 'PROJECT_CONFIG_NOT_FOUND', 'Project config not found', {}, ['Create a safe .peaks/config.json in the project or use --layer user']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      if (getErrorMessage(error) === 'MiniMax base URL must start with https://') {
+        printResult(io, fail('config.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must start with https://', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      printResult(io, fail('config.set', 'CONFIG_SET_FAILED', getErrorMessage(error), {}, ['Check the config key and layer, then retry']), options.json);
       process.exitCode = 1;
     }
+  });
+
+  const configProvider = config.command('provider').description('Manage model provider settings');
+  const minimaxProvider = configProvider.command('minimax').description('Manage MiniMax provider settings');
+  addJsonOption(
+    minimaxProvider
+      .command('set')
+      .description('Set MiniMax provider settings in user config')
+      .option('--base-url <url>', 'MiniMax Anthropic-compatible base URL')
+      .option('--api-key <key>', 'MiniMax API key stored plaintext in v1 user config')
+  ).action((options: { baseUrl?: string; apiKey?: string; json?: boolean }) => {
+    const baseUrl = options.baseUrl?.trim();
+    const apiKey = options.apiKey?.trim();
+    if (!baseUrl && !apiKey) {
+      printResult(io, fail('config.provider.minimax.set', 'MINIMAX_PROVIDER_NO_VALUES', 'Provide --base-url, --api-key, or both', {}, ['Run peaks config provider minimax set --base-url <url> --api-key <key>']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+    if (baseUrl && !isHttpsUrl(baseUrl)) {
+      printResult(io, fail('config.provider.minimax.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must start with https://', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const status = setMiniMaxProviderConfig({ ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) });
+      printResult(io, ok('config.provider.minimax.set', status), options.json);
+    } catch (error) {
+      if (getErrorMessage(error) === 'MiniMax base URL must start with https://') {
+        printResult(io, fail('config.provider.minimax.set', 'INVALID_MINIMAX_BASE_URL', 'MiniMax base URL must start with https://', {}, ['Use a MiniMax Anthropic-compatible HTTPS endpoint']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      printResult(io, fail('config.provider.minimax.set', 'MINIMAX_PROVIDER_SET_FAILED', getErrorMessage(error), {}, ['Check MiniMax provider settings and retry']), options.json);
+      process.exitCode = 1;
+    }
+  });
+  addJsonOption(minimaxProvider.command('get').description('Show redacted MiniMax provider settings')).action((options: { json?: boolean }) => {
+    const config = getMiniMaxProviderConfig();
+    const status = getMiniMaxProviderStatus();
+    printResult(io, ok('config.provider.minimax.get', { ...config, apiKey: config.apiKey ? '***' : undefined, ...status }), options.json);
+  });
+  addJsonOption(minimaxProvider.command('status').description('Show MiniMax provider configuration status')).action((options: { json?: boolean }) => {
+    printResult(io, ok('config.provider.minimax.status', getMiniMaxProviderStatus()), options.json);
   });
 
   const configWorkspace = config.command('workspace').description('Manage workspaces');
@@ -298,16 +609,41 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       .option('--repo-owner <owner>', 'artifact repo owner')
       .option('--repo-name <name>', 'artifact repo name')
       .option('--layer <layer>', 'user or project', 'user')
-  ).action((options: { id: string; name: string; path: string; provider?: string; repoOwner?: string; repoName?: string; layer?: ConfigLayer; json?: boolean }) => {
-    const artifactRepo = options.provider && options.repoOwner && options.repoName
-      ? { provider: options.provider as 'github' | 'gitlab', owner: options.repoOwner, name: options.repoName }
-      : undefined;
+  ).action((options: { id: string; name: string; path: string; provider?: string; repoOwner?: string; repoName?: string; layer?: string; json?: boolean }) => {
+    const layer = parseConfigLayer(options.layer);
+    if (layer === null) {
+      printInvalidConfigLayer(io, 'config.workspace.add', options.json);
+      return;
+    }
+    const provider = options.provider;
+    const hasArtifactRepoInput = provider !== undefined || options.repoOwner !== undefined || options.repoName !== undefined;
+    let artifactRepo: { provider: ArtifactProvider; owner: string; name: string } | undefined;
+
+    if (hasArtifactRepoInput) {
+      if (!provider || !options.repoOwner || !options.repoName) {
+        printResult(io, fail('config.workspace.add', 'INVALID_ARTIFACT_REPO_CONFIG', 'Artifact repo config requires --provider, --repo-owner, and --repo-name together', {}, ['Provide all three artifact repo options together, or omit them all']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      if (!isArtifactProvider(provider)) {
+        printResult(io, fail('config.workspace.add', 'UNSUPPORTED_ARTIFACT_PROVIDER', `Unsupported provider ${provider}`, {}, ['Use --provider github or --provider gitlab']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+      if (!isArtifactRepoSegment(options.repoOwner) || !isArtifactRepoSegment(options.repoName)) {
+        printResult(io, fail('config.workspace.add', 'INVALID_ARTIFACT_REPO_CONFIG', 'Artifact repo owner and name must use safe GitHub/GitLab path segments', {}, ['Use letters, numbers, dots, underscores, or hyphens without path traversal']), options.json);
+        process.exitCode = 1;
+        return;
+      }
+
+      artifactRepo = { provider, owner: options.repoOwner, name: options.repoName };
+    }
 
     const workspace = { workspaceId: options.id, name: options.name, rootPath: options.path, installedCapabilityIds: [] as string[] };
     if (artifactRepo) {
-      addWorkspace({ ...workspace, artifactRepo }, options.layer ?? 'user');
+      addWorkspace({ ...workspace, artifactRepo }, layer ?? 'user');
     } else {
-      addWorkspace(workspace, options.layer ?? 'user');
+      addWorkspace(workspace, layer ?? 'user');
     }
     printResult(io, ok('config.workspace.add', { workspaceId: options.id, name: options.name, rootPath: options.path, artifactRepo }), options.json);
   });
@@ -317,8 +653,13 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       .description('Remove a workspace')
       .requiredOption('--id <id>', 'workspace identifier')
       .option('--layer <layer>', 'user or project', 'user')
-  ).action((options: { id: string; layer?: ConfigLayer; json?: boolean }) => {
-    const removed = removeWorkspace(options.id, options.layer ?? 'user');
+  ).action((options: { id: string; layer?: string; json?: boolean }) => {
+    const layer = parseConfigLayer(options.layer);
+    if (layer === null) {
+      printInvalidConfigLayer(io, 'config.workspace.remove', options.json);
+      return;
+    }
+    const removed = removeWorkspace(options.id, layer ?? 'user');
     if (removed) {
       printResult(io, ok('config.workspace.remove', { workspaceId: options.id }), options.json);
     } else {
@@ -326,8 +667,13 @@ export function createProgram(io: ProgramIO = defaultIO): Command {
       process.exitCode = 1;
     }
   });
-  addJsonOption(configWorkspace.command('switch').description('Switch current workspace').requiredOption('--id <id>', 'workspace identifier').option('--layer <layer>', 'user or project', 'user')).action((options: { id: string; layer?: ConfigLayer; json?: boolean }) => {
-    const switched = setCurrentWorkspace(options.id);
+  addJsonOption(configWorkspace.command('switch').description('Switch current workspace').requiredOption('--id <id>', 'workspace identifier').option('--layer <layer>', 'user or project', 'user')).action((options: { id: string; layer?: string; json?: boolean }) => {
+    const layer = parseConfigLayer(options.layer);
+    if (layer === null) {
+      printInvalidConfigLayer(io, 'config.workspace.switch', options.json);
+      return;
+    }
+    const switched = setCurrentWorkspace(options.id, layer ?? 'user');
     if (switched) {
       printResult(io, ok('config.workspace.switch', { currentWorkspace: options.id }), options.json);
     } else {

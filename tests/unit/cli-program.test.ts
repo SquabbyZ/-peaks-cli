@@ -1,4 +1,22 @@
-import { describe, expect, test, beforeEach } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
+
+const cliTestHome = vi.hoisted(() => {
+  const { mkdtempSync } = require('node:fs') as typeof import('node:fs');
+  const { tmpdir } = require('node:os') as typeof import('node:os');
+  const { join } = require('node:path') as typeof import('node:path');
+  return mkdtempSync(join(tmpdir(), 'peaks-cli-home-'));
+});
+
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => cliTestHome };
+});
+
+mkdirSync(join(cliTestHome, '.peaks'), { recursive: true });
+writeFileSync(join(cliTestHome, '.peaks', 'config.json'), JSON.stringify({ version: '0.1.0', currentWorkspace: null, workspaces: [], language: 'en', model: 'sonnet', tokens: {}, providers: {} }), 'utf8');
+
 import { createProgram } from '../../src/cli/program.js';
 
 function createHarness() {
@@ -21,8 +39,8 @@ async function runCommand(args: string[]) {
   return { ...harness, exitCode };
 }
 
-function parseJsonOutput(stdout: string[]) {
-  return JSON.parse(stdout.join('\n')) as { ok: boolean; command: string; data: Record<string, unknown>; code?: string };
+function parseJsonOutput<T = unknown>(stdout: string[]) {
+  return JSON.parse(stdout.join('\n')) as { ok: boolean; command: string; data: T; code?: string };
 }
 
 describe('createProgram', () => {
@@ -101,6 +119,157 @@ describe('createProgram', () => {
     const output = parseJsonOutput(result.stdout);
 
     expect(JSON.stringify(output.data)).toContain('Require UT coverage >= 95%');
+  });
+
+  test('prints tech plan dry run', async () => {
+    const result = await runCommand(['tech', 'plan', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--swarm', '--dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('tech.plan');
+    expect(JSON.stringify(output.data)).toContain('tech-task-graph.json');
+  });
+
+  test('rejects tech plan without dry-run', async () => {
+    const result = await runCommand(['tech', 'plan', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--swarm', '--no-dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_NON_DRY_RUN');
+  });
+
+  test('defaults tech plan to dry-run when omitted', async () => {
+    const result = await runCommand(['tech', 'plan', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--swarm', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('tech.plan');
+  });
+
+  test('prints tech status', async () => {
+    const result = await runCommand(['tech', 'status', '--change-id', 'checkout-refactor', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('tech.status');
+  });
+
+  test('prints workflow route dry run for solo mode', async () => {
+    const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--max-workers', '40', '--dry-run', '--json']);
+    const output = parseJsonOutput<{ routePolicy: string }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('workflow.route');
+    expect(output.data.routePolicy).toBe('solo-broad-multi-model');
+  });
+
+  test('prints workflow route dry run for team mode', async () => {
+    const result = await runCommand(['workflow', 'route', '--mode', 'team', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--json']);
+    const output = parseJsonOutput<{ routePolicy: string }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.data.routePolicy).toBe('team-rd-limited-multi-model');
+  });
+
+  test('rejects unsupported workflow mode', async () => {
+    const result = await runCommand(['workflow', 'route', '--mode', 'enterprise', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_WORKFLOW_MODE');
+  });
+
+  test('rejects workflow route invalid max-workers values', async () => {
+    const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--max-workers', 'abc', '--dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_MAX_WORKERS');
+  });
+
+  test('rejects workflow route without dry-run', async () => {
+    const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--no-dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_NON_DRY_RUN');
+  });
+
+  test('prints autonomous workflow dry run for solo mode', async () => {
+    const result = await runCommand(['workflow', 'autonomous', '--mode', 'solo', '--change-id', 'autonomous-checkout', '--goal', 'Plan autonomous checkout refactor', '--max-workers', '40', '--dry-run', '--json']);
+    const output = parseJsonOutput<{ behavior: string }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('workflow.autonomous');
+    expect(output.data.behavior).toBe('preview');
+    expect(JSON.stringify(output.data)).toContain('autonomous-rd-plan.json');
+    expect(JSON.stringify(output.data)).toContain('/goal');
+  });
+
+  test('prints autonomous workflow dry run for team mode', async () => {
+    const result = await runCommand(['workflow', 'autonomous', '--mode', 'team', '--change-id', 'team-autonomous', '--goal', 'Plan team-governed autonomous work', '--json']);
+    const output = parseJsonOutput<{ mode: string }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('workflow.autonomous');
+    expect(output.data.mode).toBe('team');
+  });
+
+  test('rejects unsupported autonomous workflow mode', async () => {
+    const result = await runCommand(['workflow', 'autonomous', '--mode', 'enterprise', '--change-id', 'autonomous-checkout', '--goal', 'Plan autonomous checkout refactor', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_WORKFLOW_MODE');
+  });
+
+  test('rejects autonomous workflow invalid max-workers values', async () => {
+    const result = await runCommand(['workflow', 'autonomous', '--mode', 'solo', '--change-id', 'autonomous-checkout', '--goal', 'Plan autonomous checkout refactor', '--max-workers', 'abc', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_MAX_WORKERS');
+  });
+
+  test('rejects autonomous workflow without dry-run', async () => {
+    const result = await runCommand(['workflow', 'autonomous', '--mode', 'solo', '--change-id', 'autonomous-checkout', '--goal', 'Plan autonomous checkout refactor', '--no-dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_NON_DRY_RUN');
+  });
+
+  test('prints swarm plan dry run for rd skill', async () => {
+    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'checkout-refactor', '--goal', 'Implement approved checkout refactor', '--max-workers', '40', '--dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('swarm.plan');
+    expect(JSON.stringify(output.data)).toContain('reducer-report.md');
+  });
+
+  test('rejects unsupported swarm skill', async () => {
+    const result = await runCommand(['swarm', 'plan', '--skill', 'qa', '--change-id', 'checkout-refactor', '--goal', 'x', '--dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_SWARM_SKILL');
+  });
+
+  test('rejects invalid max-workers values', async () => {
+    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'checkout-refactor', '--goal', 'Fix checkout retry typo', '--max-workers', 'abc', '--dry-run', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_MAX_WORKERS');
+  });
+
+  test('defaults swarm plan to dry-run when omitted', async () => {
+    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'checkout-refactor', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('swarm.plan');
   });
 
   test('defaults refactor mode to solo', async () => {
@@ -198,12 +367,135 @@ describe('createProgram', () => {
     expect(output.command).toBe('config.set');
   });
 
-  test('config set rejects invalid JSON value', async () => {
-    const result = await runCommand(['config', 'set', '--key', 'language', '--value', 'not-json', '--json']);
+  test('config set rejects invalid JSON value without echoing the value', async () => {
+    const result = await runCommand(['config', 'set', '--key', 'providers.minimax.apiKey', '--value', 'not-json-secret', '--json']);
     const output = parseJsonOutput(result.stdout);
 
     expect(output.ok).toBe(false);
     expect(output.code).toBe('INVALID_JSON');
+    expect(result.stdout.join('\n')).not.toContain('not-json-secret');
+  });
+
+  test('config set redacts sensitive values and blocks project-layer secrets', async () => {
+    const secret = 'peaks-cli-test-redacted-secret';
+    const setResult = await runCommand(['config', 'set', '--key', 'providers.minimax.apiKey', '--value', JSON.stringify(secret), '--json']);
+    const setOutput = parseJsonOutput<{ value: string }>(setResult.stdout);
+
+    expect(setOutput.ok).toBe(true);
+    expect(setOutput.data.value).toBe('***');
+    expect(setResult.stdout.join('\n')).not.toContain(secret);
+
+    const exactGetResult = await runCommand(['config', 'get', '--key', 'providers.minimax.apiKey', '--json']);
+    const exactGetOutput = parseJsonOutput<string>(exactGetResult.stdout);
+    expect(exactGetOutput.data).toBe('***');
+    expect(exactGetResult.stdout.join('\n')).not.toContain(secret);
+
+    const broadGetResult = await runCommand(['config', 'get', '--key', 'providers.minimax', '--json']);
+    expect(broadGetResult.stdout.join('\n')).not.toContain(secret);
+    expect(broadGetResult.stdout.join('\n')).toContain('***');
+
+    const objectSetResult = await runCommand(['config', 'set', '--key', 'providers.minimax', '--value', JSON.stringify({ apiKey: { value: secret } }), '--json']);
+    const objectSetOutput = parseJsonOutput(objectSetResult.stdout);
+    expect(objectSetOutput.ok).toBe(true);
+    expect(objectSetResult.stdout.join('\n')).not.toContain(secret);
+    expect(objectSetResult.stdout.join('\n')).toContain('***');
+
+    const projectResult = await runCommand(['config', 'set', '--key', 'providers.minimax.apiKey', '--value', JSON.stringify(secret), '--layer', 'project', '--json']);
+    const projectOutput = parseJsonOutput(projectResult.stdout);
+    expect(projectOutput.ok).toBe(false);
+    expect(projectOutput.code).toBe('SECRET_CONFIG_REQUIRES_USER_LAYER');
+    expect(projectResult.stdout.join('\n')).not.toContain(secret);
+
+    const projectObjectResult = await runCommand(['config', 'set', '--key', 'providers.minimax', '--value', JSON.stringify({ apiKey: secret }), '--layer', 'project', '--json']);
+    const projectObjectOutput = parseJsonOutput(projectObjectResult.stdout);
+    expect(projectObjectOutput.ok).toBe(false);
+    expect(projectObjectOutput.code).toBe('SECRET_CONFIG_REQUIRES_USER_LAYER');
+    expect(projectObjectResult.stdout.join('\n')).not.toContain(secret);
+
+    const invalidLayerResult = await runCommand(['config', 'set', '--key', 'language', '--value', '"en"', '--layer', 'invalid', '--json']);
+    const invalidLayerOutput = parseJsonOutput(invalidLayerResult.stdout);
+    expect(invalidLayerOutput.ok).toBe(false);
+    expect(invalidLayerOutput.code).toBe('INVALID_CONFIG_LAYER');
+
+    const invalidGetLayerResult = await runCommand(['config', 'get', '--key', 'language', '--layer', 'invalid', '--json']);
+    const invalidGetLayerOutput = parseJsonOutput(invalidGetLayerResult.stdout);
+    expect(invalidGetLayerOutput.ok).toBe(false);
+    expect(invalidGetLayerOutput.code).toBe('INVALID_CONFIG_LAYER');
+  });
+
+  test('config provider minimax set get and status redact api keys', async () => {
+    const secret = 'peaks-cli-provider-test-secret';
+    const baseUrl = 'https://api.minimaxi.com/anthropic';
+    const setResult = await runCommand(['config', 'provider', 'minimax', 'set', '--base-url', baseUrl, '--api-key', secret, '--json']);
+    const setOutput = parseJsonOutput<{ baseUrlConfigured: boolean; apiKeyConfigured: boolean }>(setResult.stdout);
+
+    expect(setOutput.ok).toBe(true);
+    expect(setOutput.command).toBe('config.provider.minimax.set');
+    expect(setOutput.data.baseUrlConfigured).toBe(true);
+    expect(setOutput.data.apiKeyConfigured).toBe(true);
+    expect(setResult.stdout.join('\n')).not.toContain(secret);
+
+    const getResult = await runCommand(['config', 'provider', 'minimax', 'get', '--json']);
+    const getOutput = parseJsonOutput<{ baseUrl: string; apiKey: string }>(getResult.stdout);
+    expect(getOutput.ok).toBe(true);
+    expect(getOutput.data.baseUrl).toBe(baseUrl);
+    expect(getOutput.data.apiKey).toBe('***');
+    expect(getResult.stdout.join('\n')).not.toContain(secret);
+
+    const statusResult = await runCommand(['config', 'provider', 'minimax', 'status', '--json']);
+    const statusOutput = parseJsonOutput<{ configured: boolean }>(statusResult.stdout);
+    expect(statusOutput.ok).toBe(true);
+    expect(statusOutput.data.configured).toBe(true);
+    expect(statusResult.stdout.join('\n')).not.toContain(secret);
+  });
+
+  test('config provider minimax validates inputs', async () => {
+    const missingResult = await runCommand(['config', 'provider', 'minimax', 'set', '--json']);
+    const missingOutput = parseJsonOutput(missingResult.stdout);
+    expect(missingOutput.ok).toBe(false);
+    expect(missingOutput.code).toBe('MINIMAX_PROVIDER_NO_VALUES');
+
+    const invalidUrlResult = await runCommand(['config', 'provider', 'minimax', 'set', '--base-url', 'ftp://example.com', '--json']);
+    const invalidUrlOutput = parseJsonOutput(invalidUrlResult.stdout);
+    expect(invalidUrlOutput.ok).toBe(false);
+    expect(invalidUrlOutput.code).toBe('INVALID_MINIMAX_BASE_URL');
+
+    const httpUrlResult = await runCommand(['config', 'provider', 'minimax', 'set', '--base-url', 'http://api.minimaxi.com/anthropic', '--json']);
+    const httpUrlOutput = parseJsonOutput(httpUrlResult.stdout);
+    expect(httpUrlOutput.ok).toBe(false);
+    expect(httpUrlOutput.code).toBe('INVALID_MINIMAX_BASE_URL');
+  });
+
+  test('config set enforces MiniMax HTTPS base URL validation', async () => {
+    const directResult = await runCommand(['config', 'set', '--key', 'providers.minimax.baseUrl', '--value', '"http://api.minimaxi.com/anthropic"', '--json']);
+    const directOutput = parseJsonOutput(directResult.stdout);
+    expect(directOutput.ok).toBe(false);
+    expect(directOutput.code).toBe('INVALID_MINIMAX_BASE_URL');
+
+    const objectResult = await runCommand(['config', 'set', '--key', 'providers.minimax', '--value', JSON.stringify({ baseUrl: 'http://api.minimaxi.com/anthropic' }), '--json']);
+    const objectOutput = parseJsonOutput(objectResult.stdout);
+    expect(objectOutput.ok).toBe(false);
+    expect(objectOutput.code).toBe('INVALID_MINIMAX_BASE_URL');
+  });
+
+  test('config workspace commands reject invalid layers', async () => {
+    const addResult = await runCommand(['config', 'workspace', 'add', '--id', 'invalid-layer-add', '--name', 'Invalid Layer Add', '--path', '/tmp/invalid-layer-add', '--layer', 'invalid', '--json']);
+    const addOutput = parseJsonOutput(addResult.stdout);
+    expect(addOutput.ok).toBe(false);
+    expect(addOutput.code).toBe('INVALID_CONFIG_LAYER');
+    expect(addResult.exitCode).toBe(1);
+
+    const removeResult = await runCommand(['config', 'workspace', 'remove', '--id', 'invalid-layer-remove', '--layer', 'invalid', '--json']);
+    const removeOutput = parseJsonOutput(removeResult.stdout);
+    expect(removeOutput.ok).toBe(false);
+    expect(removeOutput.code).toBe('INVALID_CONFIG_LAYER');
+    expect(removeResult.exitCode).toBe(1);
+
+    const switchResult = await runCommand(['config', 'workspace', 'switch', '--id', 'invalid-layer-switch', '--layer', 'invalid', '--json']);
+    const switchOutput = parseJsonOutput(switchResult.stdout);
+    expect(switchOutput.ok).toBe(false);
+    expect(switchOutput.code).toBe('INVALID_CONFIG_LAYER');
+    expect(switchResult.exitCode).toBe(1);
   });
 
   test('prints config workspace list', async () => {
@@ -315,6 +607,41 @@ describe('createProgram', () => {
     await runCommand(['config', 'workspace', 'remove', '--id', 'test-cli-plain', '--json']);
   });
 
+  test('rejects partial config workspace artifact repo options', async () => {
+    const result = await runCommand([
+      'config', 'workspace', 'add',
+      '--id', 'test-cli-partial-repo',
+      '--name', 'Test Partial Repo',
+      '--path', '/tmp/test-cli-partial-repo',
+      '--provider', 'github',
+      '--repo-owner', 'testowner',
+      '--json'
+    ]);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_ARTIFACT_REPO_CONFIG');
+    expect(result.exitCode).toBe(1);
+  });
+
+  test('rejects unsafe config workspace artifact repo segments', async () => {
+    const result = await runCommand([
+      'config', 'workspace', 'add',
+      '--id', 'test-cli-unsafe-repo',
+      '--name', 'Test Unsafe Repo',
+      '--path', '/tmp/test-cli-unsafe-repo',
+      '--provider', 'github',
+      '--repo-owner', '../owner',
+      '--repo-name', 'test-repo',
+      '--json'
+    ]);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_ARTIFACT_REPO_CONFIG');
+    expect(result.exitCode).toBe(1);
+  });
+
   test('config workspace switch to known workspace', async () => {
     // First create a workspace
     await runCommand([
@@ -327,7 +654,7 @@ describe('createProgram', () => {
 
     // Now switch to it
     const result = await runCommand(['config', 'workspace', 'switch', '--id', 'test-switch-target', '--json']);
-    const output = parseJsonOutput(result.stdout);
+    const output = parseJsonOutput<{ currentWorkspace: string }>(result.stdout);
     expect(output.ok).toBe(true);
     expect(output.data.currentWorkspace).toBe('test-switch-target');
 

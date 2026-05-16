@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
@@ -18,9 +18,10 @@ vi.mock('../../src/services/config/config-service.js', () => ({
 }));
 
 vi.mock('../../src/services/artifacts/workspace-service.js', () => ({
+  getLocalArtifactPath: (workspace: WorkspaceConfig) => join(dirname(workspace.rootPath), `${basename(workspace.rootPath)}.peaks-artifacts`),
   getArtifactWorkspaceStatus: () => ({
     workspaceId: currentWorkspace?.workspaceId ?? 'unknown',
-    localPath: currentWorkspace ? join(currentWorkspace.rootPath, '.peaks-artifacts') : '.peaks-artifacts',
+    localPath: currentWorkspace ? join(dirname(currentWorkspace.rootPath), `${basename(currentWorkspace.rootPath)}.peaks-artifacts`) : '.peaks-artifacts',
     configured: Boolean(currentWorkspace?.artifactRepo),
     syncStatus: artifactSyncStatus,
     lastSync: null,
@@ -249,7 +250,7 @@ describe('peaks-sc service', () => {
     const githubImpact = createChangeImpact({ changeId: 'change-1' });
     expect(githubImpact.syncPointers.artifactRepo).toBe('https://github.com/acme/artifact-repo.git');
     const workspaceRoot = (currentWorkspace as WorkspaceConfig).rootPath;
-    expect(pathsEqual(githubImpact.syncPointers.localPath, join(workspaceRoot, '.peaks-artifacts'))).toBe(true);
+    expect(pathsEqual(githubImpact.syncPointers.localPath, join(dirname(workspaceRoot), `${basename(workspaceRoot)}.peaks-artifacts`))).toBe(true);
 
     currentWorkspace = createWorkspace({ provider: 'gitlab', owner: 'acme', name: 'artifact-repo' });
     const gitlabImpact = createChangeImpact({ changeId: 'change-2' });

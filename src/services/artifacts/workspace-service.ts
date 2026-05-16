@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
-import { resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { readConfig, getCurrentWorkspaceConfig } from '../config/config-service.js';
 import type { WorkspaceConfig } from '../config/config-types.js';
 import { pathExists } from '../../shared/fs.js';
@@ -29,8 +29,52 @@ export type SyncResult = {
   error?: string;
 };
 
-function getLocalArtifactPath(workspace: WorkspaceConfig): string {
-  return resolve(workspace.rootPath, '.peaks-artifacts');
+function isInsidePath(childPath: string, parentPath: string): boolean {
+  const relativePath = relative(parentPath, childPath);
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
+}
+
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function canonicalChildPath(parentPath: string, ...segments: string[]): string {
+  return canonicalPath(resolve(parentPath, ...segments));
+}
+
+export function getLocalArtifactPath(workspace: WorkspaceConfig): string {
+  const rootPath = resolve(workspace.rootPath);
+  return resolve(dirname(rootPath), `${basename(rootPath)}.peaks-artifacts`);
+}
+
+export function isArtifactWorkspaceOutsideTarget(workspace: WorkspaceConfig, artifactWorkspacePath = getLocalArtifactPath(workspace)): boolean {
+  const targetRoot = canonicalPath(workspace.rootPath);
+  const artifactRoot = canonicalPath(artifactWorkspacePath);
+  return !isInsidePath(artifactRoot, targetRoot);
+}
+
+export function hasValidArtifactWorkspace(workspace: WorkspaceConfig, artifactWorkspacePath = getLocalArtifactPath(workspace)): boolean {
+  if (!isArtifactWorkspaceOutsideTarget(workspace, artifactWorkspacePath)) return false;
+
+  const artifactRoot = canonicalPath(artifactWorkspacePath);
+  const peaksRoot = canonicalChildPath(artifactWorkspacePath, '.peaks');
+  const changesRoot = canonicalChildPath(artifactWorkspacePath, '.peaks', 'changes');
+  const configPath = canonicalChildPath(artifactWorkspacePath, '.peaks', 'config.json');
+  const targetRoot = canonicalPath(workspace.rootPath);
+
+  if (!existsSync(resolve(artifactWorkspacePath, '.peaks', 'config.json'))) return false;
+  if (!isInsidePath(peaksRoot, artifactRoot)) return false;
+  if (!isInsidePath(changesRoot, artifactRoot)) return false;
+  if (!isInsidePath(configPath, artifactRoot)) return false;
+  if (isInsidePath(peaksRoot, targetRoot)) return false;
+  if (isInsidePath(changesRoot, targetRoot)) return false;
+  if (isInsidePath(configPath, targetRoot)) return false;
+
+  return true;
 }
 
 function getPublicRemoteUrl(artifactRepo: WorkspaceConfig['artifactRepo']): string | null {
@@ -56,7 +100,14 @@ function getGitAuthEnv(artifactRepo: WorkspaceConfig['artifactRepo']): NodeJS.Pr
 }
 
 function redactSecrets(message: string): string {
-  return message.replace(/https:\/\/x-access-token:[^@]+@/g, 'https://x-access-token:***@');
+  const token = process.env.GH_TOKEN;
+  const urlRedacted = message.replace(/https:\/\/x-access-token:[^@]+@/g, 'https://x-access-token:***@');
+  const headerRedacted = urlRedacted.replace(/AUTHORIZATION:\s*basic\s+[A-Za-z0-9+/=]+/gi, 'AUTHORIZATION: basic ***');
+
+  if (!token) return headerRedacted;
+
+  const encoded = Buffer.from(`x-access-token:${token}`, 'utf-8').toString('base64');
+  return headerRedacted.replaceAll(token, '***').replaceAll(encoded, '***');
 }
 
 export async function executeArtifactSync(workspaceId?: string): Promise<SyncResult> {
@@ -77,6 +128,18 @@ export async function executeArtifactSync(workspaceId?: string): Promise<SyncRes
   }
 
   const localPath = getLocalArtifactPath(workspace);
+  if (!isArtifactWorkspaceOutsideTarget(workspace, localPath)) {
+    return {
+      workspaceId: workspace.workspaceId,
+      success: false,
+      localPath,
+      remoteUrl: null,
+      commands: [],
+      output: [],
+      error: 'Artifact workspace must be outside the target repository'
+    };
+  }
+
   const remoteUrl = getPublicRemoteUrl(workspace.artifactRepo);
   const gitAuthEnv = getGitAuthEnv(workspace.artifactRepo);
   if (!remoteUrl) {
@@ -166,8 +229,9 @@ export function getArtifactWorkspaceStatus(workspaceId?: string): ArtifactWorksp
   const localPath = getLocalArtifactPath(workspace);
   const hasLocalDir = existsSync(localPath);
   const hasArtifactRepo = !!workspace.artifactRepo;
+  const hasSafeBoundary = isArtifactWorkspaceOutsideTarget(workspace, localPath);
 
-  const syncStatus: SyncStatus = !hasArtifactRepo
+  const syncStatus: SyncStatus = !hasArtifactRepo || !hasSafeBoundary
     ? 'unknown'
     : !hasLocalDir
     ? 'pending'
@@ -176,12 +240,14 @@ export function getArtifactWorkspaceStatus(workspaceId?: string): ArtifactWorksp
   return {
     workspaceId: workspace.workspaceId,
     localPath,
-    configured: hasArtifactRepo,
+    configured: hasArtifactRepo && hasSafeBoundary,
     syncStatus,
     lastSync: null,
     hasLocalChanges: false,
     artifactRepo: workspace.artifactRepo ?? null,
-    nextActions: hasArtifactRepo
+    nextActions: !hasSafeBoundary
+      ? ['Configure artifact workspace outside the target repository.']
+      : hasArtifactRepo
       ? [`Run peaks artifacts sync --workspace ${workspace.workspaceId} --dry-run`]
       : [`Configure artifact repo: peaks config workspace add --id ${workspace.workspaceId} --provider github --repo-owner <owner> --repo-name <name>`]
   };
@@ -209,6 +275,16 @@ export function planArtifactSync(workspaceId?: string, dryRun = true): {
   }
 
   const localPath = getLocalArtifactPath(workspace);
+  if (!isArtifactWorkspaceOutsideTarget(workspace, localPath)) {
+    return {
+      workspaceId: workspace.workspaceId,
+      dryRun,
+      localPath,
+      remoteUrl: null,
+      plannedCommands: ['Artifact workspace must be outside the target repository']
+    };
+  }
+
   const remoteUrl = workspace.artifactRepo.provider === 'github'
     ? `https://github.com/${workspace.artifactRepo.owner}/${workspace.artifactRepo.name}.git`
     : `https://gitlab.com/${workspace.artifactRepo.owner}/${workspace.artifactRepo.name}.git`;

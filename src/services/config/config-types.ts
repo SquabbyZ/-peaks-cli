@@ -13,6 +13,17 @@ export type TokenConfig = {
 
 export type ModelPreference = 'haiku' | 'sonnet' | 'opus' | 'minimax';
 
+export type ModelProviderId = 'minimax';
+
+export type MiniMaxProviderConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+};
+
+export type ModelProviderConfig = {
+  minimax?: MiniMaxProviderConfig;
+};
+
 export type WorkspaceConfig = {
   workspaceId: string;
   name: string;
@@ -32,6 +43,7 @@ export type PeaksConfig = {
   language: string;
   model: ModelPreference;
   tokens: TokenConfig;
+  providers: ModelProviderConfig;
 };
 
 export type ConfigLayer = 'user' | 'project';
@@ -53,5 +65,6 @@ export const DEFAULT_CONFIG: PeaksConfig = {
   workspaces: [],
   language: 'en',
   model: 'sonnet',
-  tokens: {}
+  tokens: {},
+  providers: {}
 };
