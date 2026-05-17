@@ -1,0 +1,166 @@
+import { Command } from 'commander';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+import type { ProgramIO } from '../../src/cli/cli-helpers.js';
+
+const branchState = vi.hoisted(() => ({
+  addWorkspace: vi.fn(),
+  getConfig: vi.fn(),
+  getCurrentWorkspaceConfig: vi.fn(),
+  removeWorkspace: vi.fn(),
+  runDoctor: vi.fn(),
+  setConfig: vi.fn(),
+  setCurrentWorkspace: vi.fn(),
+  setMiniMaxProviderConfig: vi.fn()
+}));
+
+vi.mock('../../src/services/doctor/doctor-service.js', () => ({
+  runDoctor: branchState.runDoctor
+}));
+
+vi.mock('../../src/services/config/config-service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/services/config/config-service.js')>();
+  return {
+    ...actual,
+    addWorkspace: branchState.addWorkspace,
+    getConfig: branchState.getConfig,
+    getCurrentWorkspaceConfig: branchState.getCurrentWorkspaceConfig,
+    removeWorkspace: branchState.removeWorkspace,
+    setConfig: branchState.setConfig,
+    setCurrentWorkspace: branchState.setCurrentWorkspace,
+    setMiniMaxProviderConfig: branchState.setMiniMaxProviderConfig
+  };
+});
+
+function createHarness(register: (program: Command, io: ProgramIO) => void) {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const program = new Command();
+  program.exitOverride();
+  register(program, { stdout: (text) => stdout.push(text), stderr: (text) => stderr.push(text) });
+  return { program, stdout, stderr };
+}
+
+async function runRegisteredCommand(register: (program: Command, io: ProgramIO) => void, args: string[]) {
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  const harness = createHarness(register);
+  await harness.program.parseAsync(['node', 'peaks', ...args], { from: 'node' });
+  const exitCode = process.exitCode;
+  process.exitCode = previousExitCode;
+  return { ...harness, exitCode };
+}
+
+function parseJsonOutput(stdout: string[]) {
+  return JSON.parse(stdout.join('\n')) as { ok: boolean; command: string; code?: string; data?: unknown };
+}
+
+describe('cli command branch handling', () => {
+  beforeEach(() => {
+    branchState.runDoctor.mockReset();
+    branchState.setConfig.mockReset();
+    branchState.setMiniMaxProviderConfig.mockReset();
+  });
+
+  test('reports failed doctor and skill doctor checks', async () => {
+    const report = {
+      summary: { ok: false },
+      checks: [
+        { id: 'skill.registry', ok: false },
+        { id: 'node.version', ok: true }
+      ]
+    };
+    branchState.runDoctor.mockResolvedValue(report);
+    const { registerCoreAndArtifactCommands } = await import('../../src/cli/commands/core-artifact-commands.js');
+
+    const doctorResult = await runRegisteredCommand(registerCoreAndArtifactCommands, ['doctor', '--json']);
+    expect(parseJsonOutput(doctorResult.stdout).code).toBe('DOCTOR_FAILED');
+    expect(doctorResult.exitCode).toBe(1);
+
+    const skillResult = await runRegisteredCommand(registerCoreAndArtifactCommands, ['skill', 'doctor', '--json']);
+    const skillOutput = parseJsonOutput(skillResult.stdout);
+    expect(skillOutput.command).toBe('skill.doctor');
+    expect(skillResult.exitCode).toBe(1);
+  });
+
+  test('covers config get and set default layer branches', async () => {
+    const { registerConfigCommands } = await import('../../src/cli/commands/config-commands.js');
+
+    branchState.getConfig.mockReturnValueOnce({ language: 'en' });
+    const getResult = await runRegisteredCommand(registerConfigCommands, ['config', 'get', '--json']);
+    const getOutput = parseJsonOutput(getResult.stdout);
+    expect(getOutput.ok).toBe(true);
+    expect(getOutput.command).toBe('config.get');
+    expect(branchState.getConfig).toHaveBeenCalledWith({});
+
+    branchState.setConfig.mockImplementationOnce(() => {
+      throw new Error('Unexpected write failure');
+    });
+    const setResult = await runRegisteredCommand(registerConfigCommands, ['config', 'set', '--key', 'language', '--value', '"en"', '--json']);
+    expect(parseJsonOutput(setResult.stdout).code).toBe('CONFIG_SET_FAILED');
+    expect(branchState.setConfig).toHaveBeenCalledWith({ key: 'language', value: 'en', layer: 'user' });
+  });
+
+  test('maps config workspace default layer fallbacks and service errors', async () => {
+    const { registerConfigCommands } = await import('../../src/cli/commands/config-commands.js');
+
+    branchState.addWorkspace.mockImplementationOnce(() => undefined);
+    const addResult = await runRegisteredCommand(registerConfigCommands, ['config', 'workspace', 'add', '--id', 'branch-add', '--name', 'Branch Add', '--path', '/tmp/branch-add', '--json']);
+    expect(parseJsonOutput(addResult.stdout).ok).toBe(true);
+    expect(branchState.addWorkspace).toHaveBeenCalledWith({
+      workspaceId: 'branch-add',
+      name: 'Branch Add',
+      rootPath: '/tmp/branch-add',
+      installedCapabilityIds: []
+    }, 'user');
+
+    branchState.removeWorkspace.mockReturnValueOnce(false);
+    const removeResult = await runRegisteredCommand(registerConfigCommands, ['config', 'workspace', 'remove', '--id', 'branch-remove', '--json']);
+    expect(parseJsonOutput(removeResult.stdout).code).toBe('WORKSPACE_NOT_FOUND');
+    expect(branchState.removeWorkspace).toHaveBeenCalledWith('branch-remove', 'user');
+
+    branchState.setCurrentWorkspace.mockReturnValueOnce(false);
+    const switchResult = await runRegisteredCommand(registerConfigCommands, ['config', 'workspace', 'switch', '--id', 'branch-switch', '--json']);
+    expect(parseJsonOutput(switchResult.stdout).code).toBe('WORKSPACE_NOT_FOUND');
+    expect(branchState.setCurrentWorkspace).toHaveBeenCalledWith('branch-switch', 'user');
+  });
+
+  test('covers workflow route without a workspace context', async () => {
+    const { registerWorkflowCommands } = await import('../../src/cli/commands/workflow-commands.js');
+    branchState.getCurrentWorkspaceConfig.mockReturnValueOnce(null);
+
+    const harness = createHarness(registerWorkflowCommands);
+    await harness.program.parseAsync(['node', 'peaks', 'workflow', 'route', '--mode', 'solo', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--json'], { from: 'node' });
+
+    const output = parseJsonOutput(harness.stdout);
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('workflow.route');
+  });
+
+  test('maps config set and provider set service errors', async () => {
+    const { registerConfigCommands } = await import('../../src/cli/commands/config-commands.js');
+
+    branchState.setConfig.mockImplementationOnce(() => {
+      throw new Error('Project config not found');
+    });
+    const projectResult = await runRegisteredCommand(registerConfigCommands, ['config', 'set', '--key', 'language', '--value', '"en"', '--json']);
+    expect(parseJsonOutput(projectResult.stdout).code).toBe('PROJECT_CONFIG_NOT_FOUND');
+
+    branchState.setConfig.mockImplementationOnce(() => {
+      throw new Error('Unexpected write failure');
+    });
+    const genericResult = await runRegisteredCommand(registerConfigCommands, ['config', 'set', '--key', 'language', '--value', '"en"', '--json']);
+    expect(parseJsonOutput(genericResult.stdout).code).toBe('CONFIG_SET_FAILED');
+
+    branchState.setMiniMaxProviderConfig.mockImplementationOnce(() => {
+      throw new Error('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    });
+    const invalidProviderResult = await runRegisteredCommand(registerConfigCommands, ['config', 'provider', 'minimax', 'set', '--base-url', 'https://api.minimaxi.com/anthropic', '--json']);
+    expect(parseJsonOutput(invalidProviderResult.stdout).code).toBe('INVALID_MINIMAX_BASE_URL');
+
+    branchState.setMiniMaxProviderConfig.mockImplementationOnce(() => {
+      throw new Error('Unexpected provider write failure');
+    });
+    const genericProviderResult = await runRegisteredCommand(registerConfigCommands, ['config', 'provider', 'minimax', 'set', '--base-url', 'https://api.minimaxi.com/anthropic', '--json']);
+    expect(parseJsonOutput(genericProviderResult.stdout).code).toBe('MINIMAX_PROVIDER_SET_FAILED');
+  });
+});

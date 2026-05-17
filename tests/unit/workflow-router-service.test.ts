@@ -29,15 +29,24 @@ function createApprovedWorkspace(changeId: string): { workspace: WorkspaceConfig
 }
 
 describe('createWorkflowRouterPlan', () => {
-  test('creates a solo route with broad cost-tiered model hints', () => {
+  test('creates a full-auto solo route with broad cost-tiered model hints', () => {
     const plan = createWorkflowRouterPlan({ changeId: 'solo-refactor', goal: 'Refactor checkout flow', mode: 'solo', dryRun: true });
 
     expect(plan.routePolicy).toBe('solo-broad-multi-model');
     expect(plan.mode).toBe('solo');
+    expect(plan.soloMode).toBe('full-auto');
+    expect(plan.executionMode).toBe('autonomous');
+    expect(plan.decisionProfile).toContain('Full-auto mode');
     expect(plan.constraints).toEqual(['dry-run-only', 'do-not-launch-agents', 'do-not-write-artifacts', 'do-not-mutate-target-repo', 'model-tier-hints-only']);
     expect(plan.steps.filter((step) => step.modelTier === 'top-tier').map((step) => step.stage)).toEqual(['product-direction', 'design-direction', 'tech-direction', 'tech-review', 'rd-planning', 'quality-review']);
     expect(plan.steps.filter((step) => step.modelTier === 'mid-tier').map((step) => step.stage)).toEqual(['coding-execution', 'unit-test-execution']);
     expect(plan.steps.every((step) => step.dryRunOnly && !step.invokesAgents && !step.writesArtifacts)).toBe(true);
+    expect(plan.steps.find((step) => step.stage === 'product-direction')?.reason).toContain('[full-auto] decision stage');
+    expect(plan.steps.find((step) => step.stage === 'coding-execution')?.reason).toContain('[autonomous] execution stage');
+  });
+
+  test('rejects invalid solo mode values at the service boundary', () => {
+    expect(() => createWorkflowRouterPlan({ changeId: 'blank-solo-mode', goal: 'Refactor checkout flow', mode: 'solo', soloMode: '' as 'guided', dryRun: true })).toThrow('Unsupported solo mode');
   });
 
   test('creates a team route that limits mid-tier execution to peaks-rd', () => {
@@ -45,9 +54,27 @@ describe('createWorkflowRouterPlan', () => {
 
     expect(plan.routePolicy).toBe('team-rd-limited-multi-model');
     expect(plan.mode).toBe('team');
+    expect(plan.executionMode).toBe('autonomous');
+    expect(plan.decisionProfile).toContain('Team mode');
+    expect(plan.soloMode).toBeUndefined();
     expect(plan.steps.filter((step) => step.modelTier === 'mid-tier').every((step) => step.owner === 'peaks-rd')).toBe(true);
     expect(plan.steps.find((step) => step.stage === 'product-direction')?.owner).toBe('human');
     expect(plan.steps.find((step) => step.stage === 'quality-review')?.modelTier).toBe('top-tier');
+  });
+
+  test('annotates guided and rnd solo routes differently while keeping execution autonomous', () => {
+    const guidedPlan = createWorkflowRouterPlan({ changeId: 'guided-refactor', goal: 'Refactor checkout flow', mode: 'solo', soloMode: 'guided', dryRun: true });
+    const rndPlan = createWorkflowRouterPlan({ changeId: 'rnd-refactor', goal: 'Refactor checkout flow', mode: 'solo', soloMode: 'rnd', dryRun: true });
+
+    expect(guidedPlan.soloMode).toBe('guided');
+    expect(guidedPlan.executionMode).toBe('autonomous');
+    expect(guidedPlan.steps.find((step) => step.stage === 'product-direction')?.reason).toContain('[guided] decision stage');
+    expect(guidedPlan.steps.find((step) => step.stage === 'tech-direction')?.reason).toContain('[autonomous] execution stage');
+
+    expect(rndPlan.soloMode).toBe('rnd');
+    expect(rndPlan.executionMode).toBe('autonomous');
+    expect(rndPlan.steps.find((step) => step.stage === 'tech-direction')?.reason).toContain('[rnd] decision stage');
+    expect(rndPlan.steps.find((step) => step.stage === 'coding-execution')?.reason).toContain('[autonomous] execution stage');
   });
 
   test('routes product design tech and review to strongest model while execution uses MiniMax 2.7', () => {
@@ -127,5 +154,6 @@ describe('createWorkflowRouterPlan', () => {
     expect(() => createWorkflowRouterPlan({ changeId: 'foo/bar', goal: 'Fix checkout retry typo', mode: 'solo', dryRun: true })).toThrow('Invalid change-id');
     expect(() => createWorkflowRouterPlan({ changeId: 'empty-goal', goal: '   ', mode: 'solo', dryRun: true })).toThrow('Goal must be non-empty');
     expect(() => createWorkflowRouterPlan({ changeId: 'bad-mode', goal: 'Fix checkout retry typo', mode: 'enterprise' as 'solo', dryRun: true })).toThrow('Unsupported workflow mode');
+    expect(() => createWorkflowRouterPlan({ changeId: 'team-solo-mode', goal: 'Fix checkout retry typo', mode: 'team', soloMode: 'guided', dryRun: true })).toThrow('soloMode requires solo workflow mode');
   });
 });

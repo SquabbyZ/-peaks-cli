@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
@@ -15,7 +15,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => configTestHome };
 });
 
-import { addWorkspace, containsSensitiveConfigValue, getConfig, getMiniMaxProviderConfig, isConfigLayer, isSensitiveConfigPath, redactConfigSecrets, removeWorkspace, setConfig, setCurrentWorkspace, setMiniMaxProviderConfig, writeConfig } from '../../src/services/config/config-service.js';
+import { addWorkspace, containsSensitiveConfigValue, getConfig, getMiniMaxProviderConfig, isConfigLayer, isSensitiveConfigPath, readConfig, redactConfigSecrets, removeWorkspace, setConfig, setCurrentWorkspace, setMiniMaxProviderConfig, writeConfig } from '../../src/services/config/config-service.js';
 
 // Test helper path parsing logic directly
 // The actual config service uses these functions internally
@@ -145,12 +145,15 @@ describe('secret config handling', () => {
   });
 
   test('rejects insecure MiniMax base URLs through all config write paths', () => {
-    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
-    expect(() => setConfig({ key: 'providers.minimax', value: { baseUrl: 'http://api.minimaxi.com/anthropic' } })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
-    expect(() => setConfig({ key: 'providers', value: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
-    expect(() => writeConfig({ providers: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } }, 'user')).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
-    expect(() => setMiniMaxProviderConfig({ baseUrl: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
-    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://user:pass@api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be an HTTPS URL without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax', value: { baseUrl: 'http://api.minimaxi.com/anthropic' } })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => setConfig({ key: 'providers', value: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => writeConfig({ providers: { minimax: { baseUrl: 'http://api.minimaxi.com/anthropic' } } }, 'user')).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => setMiniMaxProviderConfig({ baseUrl: 'http://api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://user:pass@api.minimaxi.com/anthropic' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://api.minimaxi.com/anthropic?apiKey=secret' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://api.minimaxi.com/anthropic#token=secret' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://example.com/anthropic' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
 
     expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://api.minimaxi.com/anthropic' })).not.toThrow();
   });
@@ -171,12 +174,53 @@ describe('secret config handling', () => {
     expect(providerConfig.apiKey).toBeUndefined();
   });
 
+  test('normalizes token refs and drops malformed token config entries', () => {
+    writeConfig({
+      tokens: {
+        GitHubToken: { ghCli: true },
+        OpenAiApiKey: { env: '  OPENAI_KEY  ' },
+        AnthropicApiKey: { env: '' } as never,
+        GitLabToken: { keychain: ' ' } as never,
+        ExtraToken: { env: 'SHOULD_NOT_SURVIVE' } as never
+      }
+    } as never, 'user');
+
+    const config = getConfig({ layer: 'user' }) as { tokens?: Record<string, unknown> };
+    expect(config.tokens).toMatchObject({
+      GitHubToken: { ghCli: true },
+      OpenAiApiKey: { env: 'OPENAI_KEY' }
+    });
+    expect(config.tokens?.AnthropicApiKey).toBeUndefined();
+    expect(config.tokens?.GitLabToken).toBeUndefined();
+    expect(config.tokens?.ExtraToken).toBeUndefined();
+  });
+
   test('workspace helpers tolerate malformed layer config and use the requested layer', () => {
     writeConfig({ workspaces: 'broken' as never, currentWorkspace: 123 as never }, 'user');
     addWorkspace({ workspaceId: 'ws-a', name: 'Workspace A', rootPath: '/tmp/ws-a', installedCapabilityIds: [] }, 'user');
     expect(getConfig({ layer: 'user' })).toMatchObject({ workspaces: [{ workspaceId: 'ws-a' }] });
     expect(setCurrentWorkspace('ws-a', 'user')).toBe(true);
     expect(removeWorkspace('ws-a', 'user')).toBe(true);
+  });
+
+  test('rejects unsafe nested config paths and ignores polluted reads', () => {
+    expect(() => setConfig({ key: '__proto__.polluted', value: true })).toThrow('Unsafe config path');
+    expect(() => setConfig({ key: 'constructor.prototype.polluted', value: true })).toThrow('Unsafe config path');
+    expect(() => setConfig({ key: 'safe.path', value: 'ok' })).not.toThrow();
+    expect(getConfig({ key: '__proto__.polluted' })).toBeUndefined();
+  });
+
+  test('normalizes malformed persisted configs when reading the full config', () => {
+    writeFileSync(join(configTestHome, '.peaks', 'config.json'), JSON.stringify({ workspaces: 'broken', currentWorkspace: 123 }), 'utf8');
+    const config = readConfig() as { workspaces?: unknown[]; currentWorkspace?: unknown };
+
+    expect(Array.isArray(config.workspaces)).toBe(true);
+    expect(config.currentWorkspace === null || typeof config.currentWorkspace === 'string' || config.currentWorkspace === undefined).toBe(true);
+  });
+
+  test('rejects MiniMax provider updates when an existing stored URL is invalid', () => {
+    writeFileSync(join(configTestHome, '.peaks', 'config.json'), JSON.stringify({ providers: { minimax: { baseUrl: 'https://example.com/anthropic' } } }), 'utf8');
+    expect(() => setMiniMaxProviderConfig({ apiKey: 'secret' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
   });
 });
 

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { repoRoot } from '../../shared/paths.js';
 import { homedir } from 'node:os';
-import type { ConfigGetOptions, ConfigLayer, ConfigSetOptions, MiniMaxProviderConfig, ModelProviderConfig, PeaksConfig, TokenRef, WorkspaceConfig } from './config-types.js';
+import type { ConfigGetOptions, ConfigLayer, ConfigSetOptions, MiniMaxProviderConfig, ModelPreference, ModelProviderConfig, PeaksConfig, TokenConfig, TokenRef, WorkspaceConfig } from './config-types.js';
 import { DEFAULT_CONFIG } from './config-types.js';
 
 function getUserConfigPath(): string {
@@ -66,11 +66,25 @@ function ensureDir(dirPath: string): void {
   }
 }
 
+const UNSAFE_NESTED_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function getNestedPathParts(path: string): string[] {
+  return path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+}
+
+function hasUnsafeNestedPathSegment(parts: string[]): boolean {
+  return parts.some((part) => UNSAFE_NESTED_PATH_SEGMENTS.has(part));
+}
+
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  const parts = getNestedPathParts(path);
+  if (parts.length === 0 || hasUnsafeNestedPathSegment(parts)) {
+    return undefined;
+  }
+
   let current: unknown = obj;
   for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
+    if (current === null || current === undefined || typeof current !== 'object' || !Object.prototype.hasOwnProperty.call(current, part)) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];
@@ -79,11 +93,15 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 }
 
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
-  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  const parts = getNestedPathParts(path);
+  if (parts.length === 0 || hasUnsafeNestedPathSegment(parts)) {
+    throw new Error('Unsafe config path');
+  }
+
   let current: Record<string, unknown> = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i] as string;
-    if (!(part in current) || typeof current[part] !== 'object' || current[part] === null) {
+    if (!Object.prototype.hasOwnProperty.call(current, part) || typeof current[part] !== 'object' || current[part] === null || Array.isArray(current[part])) {
       current[part] = {};
     }
     current = current[part] as Record<string, unknown>;
@@ -102,8 +120,8 @@ export function isConfigLayer(value: string): value is ConfigLayer {
 }
 
 export function isSensitiveConfigPath(path: string): boolean {
-  const normalized = path.toLowerCase();
-  return normalized.includes('apikey') || normalized.includes('api-key') || normalized.includes('token') || normalized.includes('secret') || normalized.includes('password');
+  const normalized = path.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return normalized.includes('apikey') || normalized.includes('accesskey') || normalized.includes('privatekey') || normalized.includes('token') || normalized.includes('secret') || normalized.includes('password') || normalized.includes('bearer') || normalized.includes('credential') || normalized.includes('auth');
 }
 
 function isProviderConfigPath(path: string): boolean {
@@ -114,10 +132,25 @@ function isSecretKey(key: string): boolean {
   return isSensitiveConfigPath(key);
 }
 
-function isHttpsUrl(value: string): boolean {
+function sanitizeMiniMaxBaseUrlForDisplay(value: string): string {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.username.length === 0 && url.password.length === 0;
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '[invalid-url-redacted]';
+  }
+}
+
+const MINIMAX_API_HOST = 'api.minimaxi.com';
+
+function isValidMiniMaxBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === MINIMAX_API_HOST && url.username.length === 0 && url.password.length === 0 && url.search.length === 0 && url.hash.length === 0;
   } catch {
     return false;
   }
@@ -137,8 +170,8 @@ function getMiniMaxBaseUrlCandidate(key: string, value: unknown): unknown {
 }
 
 function validateMiniMaxBaseUrl(value: unknown): void {
-  if (value !== undefined && (typeof value !== 'string' || !isHttpsUrl(value))) {
-    throw new Error('MiniMax base URL must be an HTTPS URL without embedded credentials');
+  if (value !== undefined && (typeof value !== 'string' || !isValidMiniMaxBaseUrl(value))) {
+    throw new Error('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
   }
 }
 
@@ -175,6 +208,37 @@ function toMiniMaxProviderConfig(value: unknown): MiniMaxProviderConfig {
   };
 }
 
+const TOKEN_CONFIG_KEYS = new Set<keyof TokenConfig>(['AnthropicApiKey', 'OpenAiApiKey', 'GitHubToken', 'GitLabToken']);
+
+function toTokenRef(value: unknown): TokenRef | null {
+  if (!isRecord(value)) return null;
+  const env = typeof value.env === 'string' ? value.env.trim() : '';
+  const keychain = typeof value.keychain === 'string' ? value.keychain.trim() : '';
+  if (env.length > 0) {
+    return { env };
+  }
+  if (keychain.length > 0) {
+    return { keychain };
+  }
+  if (value.ghCli === true) {
+    return { ghCli: true };
+  }
+  return null;
+}
+
+function toTokenConfig(value: unknown): TokenConfig {
+  if (!isRecord(value)) return {};
+  const tokens: TokenConfig = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!TOKEN_CONFIG_KEYS.has(key as keyof TokenConfig)) continue;
+    const tokenRef = toTokenRef(entry);
+    if (tokenRef) {
+      tokens[key as keyof TokenConfig] = tokenRef;
+    }
+  }
+  return tokens;
+}
+
 function toModelProviderConfig(value: unknown): ModelProviderConfig {
   if (!isRecord(value)) return {};
   return { minimax: toMiniMaxProviderConfig(value.minimax) };
@@ -201,15 +265,27 @@ export function containsSensitiveConfigValue(value: unknown): boolean {
 
 export type RedactedConfigValue = string | number | boolean | null | RedactedConfigValue[] | { [key: string]: RedactedConfigValue };
 
-export function redactConfigSecrets(value: unknown): RedactedConfigValue {
+export function redactConfigSecrets(value: unknown, path = ''): RedactedConfigValue {
   if (Array.isArray(value)) {
-    return value.map((item) => redactConfigSecrets(item));
+    return value.map((item, index) => redactConfigSecrets(item, `${path}[${index}]`));
   }
   if (value === null || typeof value !== 'object') {
+    if (path === 'providers.minimax.baseUrl' && typeof value === 'string') {
+      return sanitizeMiniMaxBaseUrlForDisplay(value);
+    }
     return value as RedactedConfigValue;
   }
 
-  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, isSecretKey(key) ? '***' : redactConfigSecrets(entry)]));
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
+    const nextPath = path ? `${path}.${key}` : key;
+    if (isSecretKey(key)) {
+      return [key, '***'];
+    }
+    if (nextPath === 'providers.minimax.baseUrl' && typeof entry === 'string') {
+      return [key, sanitizeMiniMaxBaseUrlForDisplay(entry)];
+    }
+    return [key, redactConfigSecrets(entry, nextPath)];
+  }));
 }
 
 export type MiniMaxProviderStatus = {
@@ -222,15 +298,17 @@ export type MiniMaxProviderStatus = {
 };
 
 function createMiniMaxProviderStatus(config: MiniMaxProviderConfig): MiniMaxProviderStatus {
-  const baseUrlConfigured = typeof config.baseUrl === 'string' && config.baseUrl.trim().length > 0;
-  const apiKeyConfigured = typeof config.apiKey === 'string' && config.apiKey.trim().length > 0;
+  const baseUrl = config.baseUrl?.trim();
+  const apiKey = config.apiKey?.trim();
+  const baseUrlConfigured = typeof baseUrl === 'string' && baseUrl.length > 0 && isValidMiniMaxBaseUrl(baseUrl);
+  const apiKeyConfigured = typeof apiKey === 'string' && apiKey.length > 0;
   return {
     provider: 'minimax',
     configured: baseUrlConfigured && apiKeyConfigured,
     baseUrlConfigured,
     apiKeyConfigured,
     storage: 'user-plaintext-v1',
-    nextActions: baseUrlConfigured && apiKeyConfigured ? [] : ['Run peaks config provider minimax set --base-url <url> --api-key <key>']
+    nextActions: baseUrlConfigured && apiKeyConfigured ? [] : ['Export MINIMAX_API_KEY and rerun peaks config provider minimax set --base-url <url>']
   };
 }
 
@@ -253,8 +331,22 @@ export function setMiniMaxProviderConfig(input: MiniMaxProviderConfig): MiniMaxP
       ...input
     }
   };
+  validateMiniMaxBaseUrl(providers.minimax?.baseUrl);
   writeConfig({ providers }, 'user');
   return createMiniMaxProviderStatus(providers.minimax ?? {});
+}
+
+function toPeaksConfig(value: unknown): Partial<PeaksConfig> {
+  if (!isRecord(value)) return {};
+  return {
+    ...(typeof value.version === 'string' ? { version: value.version } : {}),
+    ...(typeof value.currentWorkspace === 'string' ? { currentWorkspace: value.currentWorkspace } : {}),
+    ...(Array.isArray(value.workspaces) ? { workspaces: toWorkspaceConfigs(value.workspaces) } : {}),
+    ...(typeof value.language === 'string' ? { language: value.language } : {}),
+    ...(typeof value.model === 'string' && ['haiku', 'sonnet', 'opus', 'minimax'].includes(value.model) ? { model: value.model as ModelPreference } : {}),
+    ...(isRecord(value.tokens) ? { tokens: toTokenConfig(value.tokens) } : {}),
+    ...(isRecord(value.providers) ? { providers: toModelProviderConfig(value.providers) } : {})
+  };
 }
 
 export function readConfig(projectRoot?: string | null): PeaksConfig {
@@ -262,8 +354,8 @@ export function readConfig(projectRoot?: string | null): PeaksConfig {
   const userPath = getUserConfigPath();
   const projectPath = getProjectConfigPath(detectedRoot);
 
-  const userConfig = readJsonFile(userPath) ?? {};
-  const projectConfig = removeProjectProviderSecrets(readJsonFile(projectPath) ?? {});
+  const userConfig = toPeaksConfig(readJsonFile(userPath));
+  const projectConfig = removeProjectProviderSecrets(toPeaksConfig(readJsonFile(projectPath)));
 
   return {
     ...DEFAULT_CONFIG,
@@ -304,10 +396,10 @@ export function getConfig(options: ConfigGetOptions = {}): unknown {
   const userConfig = readJsonFile(getUserConfigPath()) ?? {};
   const projectConfig = removeProjectProviderSecrets(readJsonFile(getProjectConfigPath(projectRoot)) ?? {});
   const source = options.layer === 'user' ? userConfig : options.layer === 'project' ? projectConfig : { ...userConfig, ...projectConfig };
-  const config = source as Record<string, unknown>;
+  const config = isRecord(source) ? { ...source, ...(source.tokens !== undefined ? { tokens: toTokenConfig(source.tokens) } : {}) } : source;
 
   if (options.key !== undefined) {
-    return getNestedValue(config, options.key);
+    return getNestedValue(config as Record<string, unknown>, options.key);
   }
 
   return config;

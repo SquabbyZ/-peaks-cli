@@ -5,6 +5,7 @@ import { validateChangeIdOrThrow } from '../../shared/change-id.js';
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
 
 export type WorkflowMode = 'solo' | 'team';
+export type SoloMode = 'full-auto' | 'guided' | 'rnd';
 export type ModelTier = 'top-tier' | 'mid-tier';
 export type ModelRole = 'strongest' | 'execution';
 export type WorkflowRoutePolicy = 'solo-broad-multi-model' | 'team-rd-limited-multi-model';
@@ -15,6 +16,7 @@ export type WorkflowRouterRequest = {
   changeId: string;
   goal: string;
   mode: WorkflowMode;
+  soloMode?: SoloMode;
   maxWorkers?: number;
   dryRun: true;
   artifactWorkspacePath?: string;
@@ -58,6 +60,9 @@ export type WorkflowRouterPlan = {
   readonly changeId: string;
   readonly goal: string;
   readonly mode: WorkflowMode;
+  readonly soloMode?: SoloMode;
+  readonly executionMode: 'autonomous';
+  readonly decisionProfile: string;
   readonly dryRun: true;
   readonly routePolicy: WorkflowRoutePolicy;
   readonly modelRouting: WorkflowModelRouting;
@@ -82,6 +87,8 @@ const WORKFLOW_CONSTRAINTS = Object.freeze([
 const STRONGEST_MODEL_ID = 'claude-opus-4-7' as const;
 const EXECUTION_MODEL_ID = 'minimax-2.7' as const;
 const EXECUTION_STAGES: readonly WorkflowStepStage[] = ['coding-execution', 'unit-test-execution'];
+const GUIDED_DECISION_STAGES: readonly WorkflowStepStage[] = ['product-direction', 'design-direction'];
+const GOVERNED_DECISION_STAGES: readonly WorkflowStepStage[] = ['product-direction', 'design-direction', 'tech-direction', 'tech-review'];
 
 export function isWorkflowMode(mode: string): mode is WorkflowMode {
   return mode === 'solo' || mode === 'team';
@@ -101,6 +108,12 @@ function normalizeGoal(goal: string): string {
   return normalized;
 }
 
+function assertSoloModeAllowed(mode: WorkflowMode, soloMode: SoloMode | undefined): void {
+  if (mode !== 'solo' && soloMode !== undefined) {
+    throw new Error('soloMode requires solo workflow mode');
+  }
+}
+
 function step(input: Omit<WorkflowRouterStep, 'dryRunOnly' | 'invokesAgents' | 'writesArtifacts' | 'modelRole' | 'modelId'>): WorkflowRouterStep {
   const modelRole: ModelRole = EXECUTION_STAGES.includes(input.stage) ? 'execution' : 'strongest';
   return {
@@ -111,6 +124,42 @@ function step(input: Omit<WorkflowRouterStep, 'dryRunOnly' | 'invokesAgents' | '
     invokesAgents: false,
     writesArtifacts: false
   };
+}
+
+export function isSoloMode(value: string): value is SoloMode {
+  return value === 'full-auto' || value === 'guided' || value === 'rnd';
+}
+
+function getDecisionProfileSummary(mode: WorkflowMode, soloMode: SoloMode | undefined): string {
+  if (mode === 'team') {
+    return 'Team mode keeps product and design governance on a human-controlled path while the RD execution pipeline remains autonomous.';
+  }
+
+  if (soloMode === 'guided') {
+    return 'Guided mode keeps the user in the decision loop before execution begins, while later execution remains fully autonomous.';
+  }
+
+  if (soloMode === 'rnd') {
+    return 'R&D mode asks for technical confirmation up front, then keeps implementation, testing, review, and safety checks fully autonomous.';
+  }
+
+  return 'Full-auto mode keeps the user out of the loop after the initial goal is given, while the engineering pipeline runs end to end without further prompts.';
+}
+
+function annotateSteps(steps: WorkflowRouterStep[], soloMode: SoloMode): WorkflowRouterStep[] {
+  const decisionStages = soloMode === 'guided'
+    ? GUIDED_DECISION_STAGES
+    : GOVERNED_DECISION_STAGES;
+  return steps.map((currentStep) => {
+    const isDecisionStage = decisionStages.includes(currentStep.stage);
+    const reasonPrefix = isDecisionStage
+      ? `[${soloMode}] decision stage`
+      : '[autonomous] execution stage';
+    return {
+      ...currentStep,
+      reason: `${reasonPrefix}: ${currentStep.reason}`
+    };
+  });
 }
 
 function createSoloSteps(): WorkflowRouterStep[] {
@@ -124,6 +173,10 @@ function createSoloSteps(): WorkflowRouterStep[] {
     step({ id: 'solo-unit-test-execution', stage: 'unit-test-execution', owner: 'peaks-rd', modelTier: 'mid-tier', reason: 'Unit test authoring and focused test runs should be delegated to MiniMax 2.7 execution workers.', dependsOn: ['solo-coding-execution'] }),
     step({ id: 'solo-quality-review', stage: 'quality-review', owner: 'peaks-solo', modelTier: 'top-tier', reason: 'Reducer and final quality gates need strong synthesis and risk review.', dependsOn: ['solo-unit-test-execution'] })
   ];
+}
+
+function createSoloStepsForMode(soloMode: SoloMode): WorkflowRouterStep[] {
+  return annotateSteps(createSoloSteps(), soloMode);
 }
 
 function createTeamSteps(): WorkflowRouterStep[] {
@@ -174,11 +227,27 @@ function getTechPlanNextActions(techPlan: TechPlanResult): string[] {
   return [...techPlan.nextActions];
 }
 
+function getSoloMode(mode: WorkflowMode, soloMode: SoloMode | undefined): SoloMode | undefined {
+  if (mode !== 'solo') {
+    return undefined;
+  }
+  if (soloMode === undefined) {
+    return 'full-auto';
+  }
+  if (!isSoloMode(soloMode)) {
+    throw new Error('Unsupported solo mode');
+  }
+  return soloMode;
+}
+
 export function createWorkflowRouterPlan(request: WorkflowRouterRequest): WorkflowRouterPlan {
   assertSupportedMode(request.mode);
+  assertSoloModeAllowed(request.mode, request.soloMode);
   validateChangeIdOrThrow(request.changeId);
   const goal = normalizeGoal(request.goal);
   const maxWorkers = request.maxWorkers ?? 40;
+  const soloMode = getSoloMode(request.mode, request.soloMode);
+  const decisionProfile = getDecisionProfileSummary(request.mode, soloMode);
   const sharedWorkspaceOptions = {
     ...(request.artifactWorkspacePath ? { artifactWorkspacePath: request.artifactWorkspacePath } : {}),
     ...(request.workspace ? { workspace: request.workspace } : {})
@@ -186,7 +255,7 @@ export function createWorkflowRouterPlan(request: WorkflowRouterRequest): Workfl
   const techStatus = getTechStatus({ changeId: request.changeId, ...sharedWorkspaceOptions });
   const techPlan = createTechPlan({ changeId: request.changeId, goal, swarm: true, dryRun: true, ...sharedWorkspaceOptions });
   const rdPlan = createRdSwarmPlan({ skill: 'rd', changeId: request.changeId, goal, maxWorkers, dryRun: true, ...sharedWorkspaceOptions });
-  const steps = request.mode === 'solo' ? createSoloSteps() : createTeamSteps();
+  const steps = soloMode ? createSoloStepsForMode(soloMode) : createTeamSteps();
   const blockedReasons = uniqueStrings([
     ...techStatus.blockedReasons,
     ...getTechPlanBlockedReasons(techPlan),
@@ -200,6 +269,9 @@ export function createWorkflowRouterPlan(request: WorkflowRouterRequest): Workfl
     changeId: request.changeId,
     goal,
     mode: request.mode,
+    ...(soloMode ? { soloMode } : {}),
+    executionMode: 'autonomous',
+    decisionProfile,
     dryRun: true,
     routePolicy: request.mode === 'solo' ? 'solo-broad-multi-model' : 'team-rd-limited-multi-model',
     modelRouting: createModelRouting(steps),
