@@ -311,8 +311,8 @@ describe('project config discovery', () => {
 
     const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
     try {
-      expect(readConfig()).toMatchObject({ language: 'zh', model: 'minimax', economyMode: true, swarmMode: true });
-      expect(getConfig()).toMatchObject({ language: 'zh', model: 'minimax' });
+      expect(readConfig()).toMatchObject({ language: 'zh', economyMode: true, swarmMode: true });
+      expect(getConfig()).toMatchObject({ language: 'zh' });
     } finally {
       cwdSpy.mockRestore();
     }

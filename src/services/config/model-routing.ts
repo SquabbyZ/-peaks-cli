@@ -7,7 +7,10 @@ export function getConfiguredExecutionModelId(providers: ModelProviderConfig | u
   const configuredModel = providerConfigs
     .map((provider) => provider?.model?.trim())
     .find((model): model is string => typeof model === 'string' && model.length > 0);
-  return configuredModel ?? 'minimax-2.7';
+  if (!configuredModel) {
+    throw new Error('Execution model must be configured in providers');
+  }
+  return configuredModel;
 }
 
 export function getEconomyAwareExecutionModelId(config: Pick<PeaksConfig, 'economyMode' | 'providers'>): string {

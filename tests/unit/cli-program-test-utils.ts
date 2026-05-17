@@ -25,7 +25,7 @@ vi.mock('../../src/services/providers/minimax-worker-service.js', () => ({
   runMiniMaxWorker: cliProgramTestState.workerRun
 }));
 
-const DEFAULT_CLI_CONFIG = { version: '0.1.0', currentWorkspace: null, workspaces: [], language: 'en', model: 'sonnet', tokens: {}, providers: {} };
+const DEFAULT_CLI_CONFIG = { version: '0.1.0', currentWorkspace: null, workspaces: [], language: 'en', model: 'sonnet', tokens: {}, providers: { minimax: { model: 'minimax-2.7' } } };
 
 import { createProgram } from '../../src/cli/program.js';
 

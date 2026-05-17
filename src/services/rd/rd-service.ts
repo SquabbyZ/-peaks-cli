@@ -4,13 +4,12 @@ import { validateChangeIdOrThrow, buildArtifactRelativePath } from '../../shared
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
 import { hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
 import type { WorkspaceConfig } from '../config/config-types.js';
+import { getConfiguredExecutionModelId, STRONGEST_MODEL_ID } from '../config/model-routing.js';
 import { getTechStatus, TECH_REQUIRED_ARTIFACTS } from '../tech/tech-service.js';
 
 export type RdSkill = 'rd';
-export type RdWaveName = 'discovery' | 'planning' | 'implementation candidates' | 'quality gates' | 'reducer';
+export type RdWaveName = 'discovery' | 'planning' | 'implementation candidates' | 'unit-test execution' | 'quality gates' | 'reducer';
 export type RdModelRole = 'strongest' | 'execution';
-
-const STRONGEST_MODEL_ID = 'claude-opus-4-7' as const;
 
 export type RdSwarmPlanRequest = {
   skill: RdSkill;
@@ -138,7 +137,9 @@ function buildTaskIds(workerTarget: number): string[] {
   const fixed = [
     'rd-discovery-1', 'rd-discovery-2', 'rd-discovery-3', 'rd-discovery-4', 'rd-discovery-5', 'rd-discovery-6', 'rd-discovery-7', 'rd-discovery-8',
     'rd-planning-1', 'rd-planning-2', 'rd-planning-3', 'rd-planning-4', 'rd-planning-5', 'rd-planning-6', 'rd-planning-7', 'rd-planning-8',
-    'rd-quality-1', 'rd-quality-2', 'rd-quality-3', 'rd-quality-4', 'rd-quality-5', 'rd-quality-6', 'rd-reducer-1',
+    'rd-test-1', 'rd-test-2', 'rd-test-3',
+    'peaks-qa-1', 'peaks-qa-2', 'peaks-qa-3', 'peaks-qa-4',
+    'rd-reducer-1',
   ];
 
   const implementationCount = Math.max(workerTarget - fixed.length, 1);
@@ -193,7 +194,7 @@ function selectConcreteTargetArea(targetAreas: [string, ...string[]], index: num
 }
 
 function getTaskModelRole(wave: RdWaveName): RdModelRole {
-  return wave === 'implementation candidates' ? 'execution' : 'strongest';
+  return wave === 'implementation candidates' || wave === 'unit-test execution' ? 'execution' : 'strongest';
 }
 
 function getTaskModelId(modelRole: RdModelRole, executionModelId: string): string {
@@ -269,7 +270,7 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
   validateChangeIdOrThrow(request.changeId);
   const goal = normalizeGoal(request.goal);
   const swarmMode = request.swarmMode ?? true;
-  const executionModelId = request.executionModelId?.trim() || 'minimax-2.7';
+  const executionModelId = request.executionModelId?.trim() || getConfiguredExecutionModelId(undefined);
   const { workerTarget, blockedReasons } = resolveWorkerTarget(request.maxWorkers);
   const artifactRoot = buildArtifactRelativePath(request.changeId, 'swarm');
   const techStatus = getTechStatus({
@@ -331,18 +332,46 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
     };
   }
 
+  if (blockedReasons.includes('worker-count-below-target')) {
+    return {
+      changeId: request.changeId,
+      goal,
+      swarmMode,
+      workerTarget,
+      waves: [],
+      tasks: [],
+      conflictGroups: [],
+      artifactRoot,
+      outputs: {
+        taskGraph: buildArtifactRelativePath(request.changeId, 'swarm', 'task-graph.json'),
+        waveManifests: [],
+        workerBriefs: [],
+        reducerReport: buildArtifactRelativePath(request.changeId, 'swarm', 'reducer-report.md'),
+      },
+      gateStatus: {
+        techApprovalRequired: requiresTechApproval,
+        techStatus: techStatus.status,
+        ...(techGateSkipped ? { skipReason: 'tech-gate-skipped-clear-implementation-path' } : {}),
+      },
+      blockedReasons,
+      nextActions: ['Lower max-workers to match the current change scope or accept the capped target.'],
+    };
+  }
+
   const taskIds = buildTaskIds(workerTarget);
   const concreteTargetAreas = getConcreteTargetAreas(request, techStatus.status === 'approved');
   const discoveryTaskIds = taskIds.slice(0, 8);
   const planningTaskIds = taskIds.slice(8, 16);
-  const implementationTaskIds = taskIds.slice(16, taskIds.length - 7);
-  const qualityTaskIds = taskIds.slice(taskIds.length - 7, taskIds.length - 1);
+  const implementationTaskIds = taskIds.slice(16, taskIds.length - 8);
+  const unitTestTaskIds = taskIds.slice(taskIds.length - 8, taskIds.length - 5);
+  const qualityTaskIds = taskIds.slice(taskIds.length - 5, taskIds.length - 1);
   const reducerTaskIds = taskIds.slice(taskIds.length - 1);
 
   const waves: RdWave[] = [
     { name: 'discovery', taskIds: [...discoveryTaskIds] },
     { name: 'planning', taskIds: [...planningTaskIds] },
     { name: 'implementation candidates', taskIds: [...implementationTaskIds] },
+    { name: 'unit-test execution', taskIds: [...unitTestTaskIds] },
     { name: 'quality gates', taskIds: [...qualityTaskIds] },
     { name: 'reducer', taskIds: [...reducerTaskIds] },
   ];
@@ -351,12 +380,13 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
     discovery: [],
     planning: discoveryTaskIds,
     'implementation candidates': planningTaskIds,
-    'quality gates': implementationTaskIds,
+    'unit-test execution': implementationTaskIds,
+    'quality gates': unitTestTaskIds,
     reducer: qualityTaskIds,
   };
 
   const tasks: RdTask[] = taskIds.map((taskId, index): RdTask => {
-    const wave: RdWaveName = index < 8 ? 'discovery' : index < 16 ? 'planning' : index < taskIds.length - 7 ? 'implementation candidates' : index < taskIds.length - 1 ? 'quality gates' : 'reducer';
+    const wave: RdWaveName = index < 8 ? 'discovery' : index < 16 ? 'planning' : index < taskIds.length - 8 ? 'implementation candidates' : index < taskIds.length - 5 ? 'unit-test execution' : index < taskIds.length - 1 ? 'quality gates' : 'reducer';
     const briefPath = buildArtifactRelativePath(request.changeId, 'swarm', 'workers', taskId, 'brief.md');
     const implementationIndex = index - 16;
     const targetArea = wave === 'implementation candidates' && hasConcreteTargetAreas(concreteTargetAreas)
@@ -375,7 +405,15 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
       dependsOn: [...waveDependencies[wave]],
       conflictGroup: `group-${wave.replace(/\s+/g, '-')}`,
       targetArea,
-      expectedEvidence: wave === 'reducer' ? 'reducer-report.md' : `${taskId}.md`,
+      expectedEvidence: wave === 'reducer'
+        ? 'reducer-report.md'
+        : wave === 'implementation candidates'
+          ? `${taskId}-patch-summary.md`
+          : wave === 'unit-test execution'
+            ? `${taskId}-test-command-result.md`
+            : wave === 'quality gates'
+              ? `${taskId}-qa-review.md`
+              : `${taskId}.md`,
     };
   });
 

@@ -93,10 +93,11 @@ export type WorkflowRouterPlan = {
 
 const WORKFLOW_CONSTRAINTS = Object.freeze([
   'dry-run-only',
+  'requires-swarm-execution-for-rd-and-qa-when-enabled',
+  'execution-model-from-config-providers',
   'do-not-launch-agents',
   'do-not-write-artifacts',
-  'do-not-mutate-target-repo',
-  'model-tier-hints-only'
+  'do-not-mutate-target-repo'
 ]);
 
 const EXECUTION_STAGES: readonly WorkflowStepStage[] = ['coding-execution', 'unit-test-execution'];
@@ -245,7 +246,7 @@ function createModeStatus(economyMode: boolean, swarmMode: boolean, executionMod
     ? `Economy mode enabled: code worker and test worker strictly use ${executionModelId} from config providers.`
     : `Economy mode disabled: code worker and test worker use ${STRONGEST_MODEL_ID}, matching planner/reviewer.`;
   const swarmSummary = swarmMode
-    ? 'Swarm mode enabled: workflow planning must use Peaks swarm capability.'
+    ? 'Swarm mode enabled: peaks-rd coding, unit-test, and peaks-qa quality work must be represented as swarm worker tasks.'
     : 'Swarm mode disabled: swarm worker graph generation is bypassed.';
   return {
     economyModeEnabled: economyMode,
@@ -277,8 +278,7 @@ export function createWorkflowRouterPlan(request: WorkflowRouterRequest): Workfl
   const maxWorkers = request.maxWorkers ?? 40;
   const economyMode = request.config?.economyMode ?? DEFAULT_CONFIG.economyMode;
   const swarmMode = request.config?.swarmMode ?? DEFAULT_CONFIG.swarmMode;
-  const configuredExecutionModelId = getConfiguredExecutionModelId(request.config?.providers);
-  const executionModelId = economyMode ? configuredExecutionModelId : STRONGEST_MODEL_ID;
+  const executionModelId = economyMode ? getConfiguredExecutionModelId(request.config?.providers) : STRONGEST_MODEL_ID;
   const modeStatus = createModeStatus(economyMode, swarmMode, executionModelId, economyMode ? 'config.providers' : 'planner-reviewer-strongest-model');
   const soloMode = getSoloMode(request.mode, request.soloMode);
   const decisionProfile = getDecisionProfileSummary(request.mode, soloMode);

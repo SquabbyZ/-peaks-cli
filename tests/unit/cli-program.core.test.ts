@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { parseJsonOutput, resetCliProgramMocks, runCommand, writeUserConfig } from './cli-program-test-utils.js';
 
 describe('createProgram', () => {
@@ -337,7 +337,7 @@ describe('createProgram', () => {
 
     const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-economy-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
     const output = parseJsonOutput<{ tasks: Array<{ wave: string; modelRole: string; modelId: string }> }>(result.stdout);
-    const executionTasks = output.data.tasks.filter((task) => task.wave === 'implementation candidates');
+    const executionTasks = output.data.tasks.filter((task) => task.wave === 'implementation candidates' || task.wave === 'unit-test execution');
 
     expect(output.ok).toBe(true);
     expect(executionTasks.length).toBeGreaterThan(0);
@@ -345,54 +345,46 @@ describe('createProgram', () => {
   });
 
   test('routes direct swarm plan execution workers to strongest model when economy mode is disabled', async () => {
-    writeUserConfig({
-      version: '0.1.0',
-      currentWorkspace: null,
-      workspaces: [],
-      language: 'en',
-      model: 'sonnet',
-      economyMode: false,
-      swarmMode: true,
-      tokens: {},
-      providers: { minimax: { model: 'minimax-2.7' } },
-      proxy: {}
-    });
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-project-config-'));
+    mkdirSync(join(projectRoot, '.peaks'), { recursive: true });
+    writeFileSync(join(projectRoot, '.peaks', 'config.json'), JSON.stringify({ economyMode: false, swarmMode: true }), 'utf8');
 
-    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-no-economy-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
-    const output = parseJsonOutput<{ tasks: Array<{ wave: string; modelRole: string; modelId: string }> }>(result.stdout);
-    const executionTasks = output.data.tasks.filter((task) => task.wave === 'implementation candidates');
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+    try {
+      const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-no-economy-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
+      const output = parseJsonOutput<{ tasks: Array<{ wave: string; modelRole: string; modelId: string }> }>(result.stdout);
+      const executionTasks = output.data.tasks.filter((task) => task.wave === 'implementation candidates' || task.wave === 'unit-test execution');
 
-    expect(output.ok).toBe(true);
-    expect(output.command).toBe('swarm.plan');
-    expect(executionTasks.length).toBeGreaterThan(0);
-    expect(executionTasks.every((task) => task.modelRole === 'execution' && task.modelId === 'claude-opus-4-7')).toBe(true);
-    expect(executionTasks.some((task) => task.modelId === 'minimax-2.7')).toBe(false);
+      expect(output.ok).toBe(true);
+      expect(output.command).toBe('swarm.plan');
+      expect(executionTasks.length).toBeGreaterThan(0);
+      expect(executionTasks.every((task) => task.modelRole === 'execution' && task.modelId === 'claude-opus-4-7')).toBe(true);
+      expect(executionTasks.some((task) => task.modelId === 'minimax-2.7')).toBe(false);
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 
   test('bypasses direct swarm plan worker graph when swarm mode is disabled', async () => {
-    writeUserConfig({
-      version: '0.1.0',
-      currentWorkspace: null,
-      workspaces: [],
-      language: 'en',
-      model: 'sonnet',
-      economyMode: true,
-      swarmMode: false,
-      tokens: {},
-      providers: { minimax: { model: 'minimax-2.7' } },
-      proxy: {}
-    });
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-project-config-'));
+    mkdirSync(join(projectRoot, '.peaks'), { recursive: true });
+    writeFileSync(join(projectRoot, '.peaks', 'config.json'), JSON.stringify({ economyMode: true, swarmMode: false }), 'utf8');
 
-    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-no-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
-    const output = parseJsonOutput<{ swarmMode: boolean; waves: unknown[]; tasks: unknown[]; conflictGroups: unknown[]; blockedReasons: string[] }>(result.stdout);
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+    try {
+      const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-no-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
+      const output = parseJsonOutput<{ swarmMode: boolean; waves: unknown[]; tasks: unknown[]; conflictGroups: unknown[]; blockedReasons: string[] }>(result.stdout);
 
-    expect(output.ok).toBe(true);
-    expect(output.command).toBe('swarm.plan');
-    expect(output.data.swarmMode).toBe(false);
-    expect(output.data.waves).toEqual([]);
-    expect(output.data.tasks).toEqual([]);
-    expect(output.data.conflictGroups).toEqual([]);
-    expect(output.data.blockedReasons).not.toContain('swarm-mode-disabled');
+      expect(output.ok).toBe(true);
+      expect(output.command).toBe('swarm.plan');
+      expect(output.data.swarmMode).toBe(false);
+      expect(output.data.waves).toEqual([]);
+      expect(output.data.tasks).toEqual([]);
+      expect(output.data.conflictGroups).toEqual([]);
+      expect(output.data.blockedReasons).not.toContain('swarm-mode-disabled');
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 
   test('rejects unsupported swarm skill', async () => {

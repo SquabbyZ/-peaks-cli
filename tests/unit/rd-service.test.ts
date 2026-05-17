@@ -47,9 +47,10 @@ describe('createRdSwarmPlan', () => {
     if (!plan.available) return;
     expect(plan.swarmMode).toBe(true);
     expect(plan.workerTarget).toBe(40);
-    expect(plan.waves.map((wave) => wave.name)).toEqual(['discovery', 'planning', 'implementation candidates', 'quality gates', 'reducer']);
+    expect(plan.waves.map((wave) => wave.name)).toEqual(['discovery', 'planning', 'implementation candidates', 'unit-test execution', 'quality gates', 'reducer']);
     expect(plan.tasks.length).toBeGreaterThanOrEqual(25);
     expect(plan.tasks.length).toBeLessThanOrEqual(40);
+    expect(plan.tasks.length).toBeLessThanOrEqual(plan.workerTarget);
     expect(plan.outputs.taskGraph).toBe('.peaks/changes/checkout-refactor/swarm/task-graph.json');
     expect(plan.outputs.reducerReport).toBe('.peaks/changes/checkout-refactor/swarm/reducer-report.md');
 
@@ -57,11 +58,11 @@ describe('createRdSwarmPlan', () => {
     for (const task of plan.tasks) {
       const owningWave = plan.waves.find((wave) => wave.taskIds.includes(task.taskId));
       expect(owningWave?.name).toBe(task.wave);
-      expect(task.taskId.startsWith('rd-')).toBe(true);
+      expect(task.taskId.startsWith('rd-') || task.taskId.startsWith('peaks-qa-')).toBe(true);
       expect(task.workerKind.length).toBeGreaterThan(0);
       expect(task.purpose).toContain('Implement approved checkout refactor');
-      expect(task.modelRole).toBe(task.wave === 'implementation candidates' ? 'execution' : 'strongest');
-      expect(task.modelId).toBe(task.wave === 'implementation candidates' ? 'minimax-2.7' : 'claude-opus-4-7');
+      expect(task.modelRole).toBe(task.wave === 'implementation candidates' || task.wave === 'unit-test execution' ? 'execution' : 'strongest');
+      expect(task.modelId).toBe(task.wave === 'implementation candidates' || task.wave === 'unit-test execution' ? 'minimax-2.7' : 'claude-opus-4-7');
       expect(task.inputs.length).toBeGreaterThan(0);
       expect(task.outputs.every((output) => output.startsWith('.peaks/changes/checkout-refactor/swarm/'))).toBe(true);
       expect(task.outputs.every((output) => !output.includes('\\'))).toBe(true);
@@ -73,8 +74,9 @@ describe('createRdSwarmPlan', () => {
     expect(plan.tasks.filter((task) => task.wave === 'discovery').every((task) => task.dependsOn.length === 0)).toBe(true);
     expect(plan.tasks.filter((task) => task.wave === 'planning').every((task) => task.dependsOn.length === 8)).toBe(true);
     expect(plan.tasks.filter((task) => task.wave === 'implementation candidates').every((task) => task.dependsOn.length === 8)).toBe(true);
-    expect(plan.tasks.filter((task) => task.wave === 'quality gates').every((task) => task.dependsOn.length === plan.waves[2]?.taskIds.length)).toBe(true);
-    expect(plan.tasks.filter((task) => task.wave === 'reducer').every((task) => task.dependsOn.length === 6)).toBe(true);
+    expect(plan.tasks.filter((task) => task.wave === 'unit-test execution').every((task) => task.dependsOn.length === plan.waves[2]?.taskIds.length)).toBe(true);
+    expect(plan.tasks.filter((task) => task.wave === 'quality gates').every((task) => task.dependsOn.length === plan.waves[3]?.taskIds.length)).toBe(true);
+    expect(plan.tasks.filter((task) => task.wave === 'reducer').every((task) => task.dependsOn.length === 4)).toBe(true);
   });
 
   test('blocks RD swarm planning when tech approval is required but not approved', () => {
@@ -94,6 +96,36 @@ describe('createRdSwarmPlan', () => {
     expect(plan.gateStatus.techStatus).not.toBe('approved');
     expect(plan.blockedReasons).toContain('tech-approval-required');
     expect(plan.nextActions).toEqual(['Run peaks tech plan --dry-run and approve the tech plan before running peaks swarm plan.']);
+  });
+
+  test('represents coding and unit-test execution as configured-model swarm workers', () => {
+    const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
+    const architectureRoot = join(artifactWorkspace, '.peaks', 'changes', 'configured-execution-workers', 'architecture');
+    mkdirSync(architectureRoot, { recursive: true });
+    for (const artifact of TECH_REQUIRED_ARTIFACTS) {
+      writeFileSync(join(architectureRoot, artifact), artifact === 'tech-approval-record.md' ? 'status: approved' : 'ready', 'utf8');
+    }
+
+    const plan = createRdSwarmPlan({
+      skill: 'rd',
+      changeId: 'configured-execution-workers',
+      goal: 'Implement approved checkout refactor',
+      maxWorkers: 40,
+      executionModelId: 'custom-exec-model-v1',
+      dryRun: true,
+      artifactWorkspacePath: artifactWorkspace,
+      workspace
+    });
+
+    expect(plan.available).toBe(true);
+    if (!plan.available) return;
+    const codingTasks = plan.tasks.filter((task) => task.wave === 'implementation candidates');
+    const unitTestTasks = plan.tasks.filter((task) => task.wave === 'unit-test execution');
+    expect(codingTasks.length).toBeGreaterThan(0);
+    expect(unitTestTasks.length).toBeGreaterThan(0);
+    expect([...codingTasks, ...unitTestTasks].every((task) => task.modelRole === 'execution' && task.modelId === 'custom-exec-model-v1')).toBe(true);
+    expect([...codingTasks, ...unitTestTasks].every((task) => task.expectedEvidence.includes('patch') || task.expectedEvidence.includes('test'))).toBe(true);
+    expect(plan.tasks.filter((task) => task.modelRole === 'execution').every((task) => task.modelId !== 'minimax-2.7')).toBe(true);
   });
 
   test('derives implementation target areas from approved tech artifacts', () => {
@@ -128,7 +160,7 @@ describe('createRdSwarmPlan', () => {
     expect(targetAreas).not.toContain('packages/client/src/forbidden.ts');
     expect(targetAreas).not.toContain('area-1');
     expect(targetAreas).not.toContain('area-2');
-    expect(plan.tasks.filter((task) => task.wave === 'implementation candidates').every((task) => task.modelRole === 'execution' && task.modelId === 'minimax-2.7')).toBe(true);
+    expect(plan.tasks.filter((task) => task.wave === 'implementation candidates' || task.wave === 'unit-test execution').every((task) => task.modelRole === 'execution' && task.modelId === 'minimax-2.7')).toBe(true);
     expect(plan.tasks.filter((task) => task.wave === 'quality gates' || task.wave === 'reducer').every((task) => task.modelRole === 'strongest' && task.modelId === 'claude-opus-4-7')).toBe(true);
   });
 
@@ -569,6 +601,7 @@ describe('createRdSwarmPlan', () => {
     if (plan.available) return;
     expect(plan.behavior).toBe('blocked');
     expect(plan.blockedReasons).toContain('worker-count-below-target');
+    expect(plan.tasks.length).toBeLessThanOrEqual(plan.workerTarget);
   });
 
   test('caps worker count above 40', () => {

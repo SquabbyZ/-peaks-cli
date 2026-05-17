@@ -182,9 +182,12 @@ function renderSecurity(): string {
 
 function renderLanguageCodingStyle(language: StandardsLanguage): string {
   const languageName = language === 'generic' ? 'Generic' : language[0]!.toUpperCase() + language.slice(1);
+  const typeSafetyRule = language === 'typescript' || language === 'javascript'
+    ? '- Do not add new `any` types; use explicit domain types, generics, or `unknown` with narrowing.\n'
+    : '';
   return `${renderHeader(`${languageName} Coding Standards`)}- Apply project-local conventions before generic ${language} guidance.
 - Keep public APIs typed or documented according to ${language} ecosystem norms.
-- Prefer standard tooling and existing project scripts for formatting, linting, tests, and coverage.
+${typeSafetyRule}- Prefer standard tooling and existing project scripts for formatting, linting, tests, and coverage.
 - peaks-rd must check this file before planning code changes in ${language} projects.
 `;
 }
