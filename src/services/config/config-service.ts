@@ -130,7 +130,7 @@ function isSecretKey(key: string): boolean {
   return isSensitiveConfigPath(key);
 }
 
-function sanitizeMiniMaxBaseUrlForDisplay(value: string): string {
+function sanitizeBaseUrlForDisplay(value: string): string {
   try {
     const url = new URL(value);
     url.username = '';
@@ -144,6 +144,19 @@ function sanitizeMiniMaxBaseUrlForDisplay(value: string): string {
 }
 
 const MINIMAX_API_HOST = 'api.minimaxi.com';
+
+function isProviderBaseUrlPath(path: string): boolean {
+  return /^providers\.[^.]+\.baseUrl$/.test(path);
+}
+
+function isValidProviderBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.username.length === 0 && url.password.length === 0 && url.search.length === 0 && url.hash.length === 0;
+  } catch {
+    return false;
+  }
+}
 
 function isValidMiniMaxBaseUrl(value: string): boolean {
   try {
@@ -167,6 +180,12 @@ function getMiniMaxBaseUrlCandidate(key: string, value: unknown): unknown {
   return undefined;
 }
 
+function validateProviderBaseUrl(value: unknown): void {
+  if (value !== undefined && (typeof value !== 'string' || !isValidProviderBaseUrl(value))) {
+    throw new Error('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+  }
+}
+
 function validateMiniMaxBaseUrl(value: unknown): void {
   if (value !== undefined && (typeof value !== 'string' || !isValidMiniMaxBaseUrl(value))) {
     throw new Error('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
@@ -187,8 +206,17 @@ function isProxyConfigPath(path: string): boolean {
   return path === 'proxy' || path.startsWith('proxy.');
 }
 
+function validateModelProviderConfig(providers: ModelProviderConfig): void {
+  validateMiniMaxBaseUrl(providers.minimax?.baseUrl);
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (providerId !== 'minimax') {
+      validateProviderBaseUrl(provider?.baseUrl);
+    }
+  }
+}
+
 function validateProviderConfig(partial: Partial<PeaksConfig>): void {
-  validateMiniMaxBaseUrl(partial.providers?.minimax?.baseUrl);
+  validateModelProviderConfig(partial.providers ?? {});
 }
 
 function isValidProxyUrl(value: string): boolean {
@@ -231,12 +259,17 @@ function toWorkspaceConfigs(value: unknown): WorkspaceConfig[] {
   return Array.isArray(value) ? value.map(toWorkspaceConfig).filter((workspace): workspace is WorkspaceConfig => workspace !== null) : [];
 }
 
-function toMiniMaxProviderConfig(value: unknown): MiniMaxProviderConfig {
+function toProviderModelConfig(value: unknown): MiniMaxProviderConfig {
   if (!isRecord(value)) return {};
   return {
+    ...(typeof value.model === 'string' && value.model.trim().length > 0 ? { model: value.model.trim() } : {}),
     ...(typeof value.baseUrl === 'string' ? { baseUrl: value.baseUrl } : {}),
     ...(typeof value.apiKey === 'string' ? { apiKey: value.apiKey } : {})
   };
+}
+
+function toMiniMaxProviderConfig(value: unknown): MiniMaxProviderConfig {
+  return toProviderModelConfig(value);
 }
 
 const TOKEN_CONFIG_KEYS = new Set<keyof TokenConfig>(['AnthropicApiKey', 'OpenAiApiKey', 'GitHubToken', 'GitLabToken']);
@@ -272,7 +305,7 @@ function toTokenConfig(value: unknown): TokenConfig {
 
 function toModelProviderConfig(value: unknown): ModelProviderConfig {
   if (!isRecord(value)) return {};
-  return { minimax: toMiniMaxProviderConfig(value.minimax) };
+  return Object.fromEntries(Object.entries(value).map(([providerId, providerConfig]) => [providerId, toProviderModelConfig(providerConfig)]));
 }
 
 function toProxyConfig(value: unknown): ProxyConfig | null {
@@ -306,8 +339,8 @@ export function redactConfigSecrets(value: unknown, path = ''): RedactedConfigVa
     return value.map((item, index) => redactConfigSecrets(item, `${path}[${index}]`));
   }
   if (value === null || typeof value !== 'object') {
-    if (path === 'providers.minimax.baseUrl' && typeof value === 'string') {
-      return sanitizeMiniMaxBaseUrlForDisplay(value);
+    if (isProviderBaseUrlPath(path) && typeof value === 'string') {
+      return sanitizeBaseUrlForDisplay(value);
     }
     return value as RedactedConfigValue;
   }
@@ -317,8 +350,8 @@ export function redactConfigSecrets(value: unknown, path = ''): RedactedConfigVa
     if (isSecretKey(key)) {
       return [key, '***'];
     }
-    if (nextPath === 'providers.minimax.baseUrl' && typeof entry === 'string') {
-      return [key, sanitizeMiniMaxBaseUrlForDisplay(entry)];
+    if (isProviderBaseUrlPath(nextPath) && typeof entry === 'string') {
+      return [key, sanitizeBaseUrlForDisplay(entry)];
     }
     return [key, redactConfigSecrets(entry, nextPath)];
   }));
@@ -381,6 +414,8 @@ function toPeaksConfig(value: unknown): Partial<PeaksConfig> {
     ...(Array.isArray(value.workspaces) ? { workspaces: toWorkspaceConfigs(value.workspaces) } : {}),
     ...(typeof value.language === 'string' ? { language: value.language } : {}),
     ...(typeof value.model === 'string' && ['haiku', 'sonnet', 'opus', 'minimax'].includes(value.model) ? { model: value.model as ModelPreference } : {}),
+    ...(typeof value.economyMode === 'boolean' ? { economyMode: value.economyMode } : {}),
+    ...(typeof value.swarmMode === 'boolean' ? { swarmMode: value.swarmMode } : {}),
     ...(isRecord(value.tokens) ? { tokens: toTokenConfig(value.tokens) } : {}),
     ...(isRecord(value.providers) ? { providers: toModelProviderConfig(value.providers) } : {}),
     ...(proxy ? { proxy } : {})
@@ -455,6 +490,16 @@ export function setConfig(options: ConfigSetOptions): void {
     throw new Error('Sensitive config keys must be stored in the user config layer');
   }
   validateMiniMaxBaseUrl(getMiniMaxBaseUrlCandidate(options.key, options.value));
+  if (options.key === 'providers') {
+    validateModelProviderConfig(toModelProviderConfig(options.value));
+  } else if (options.key.startsWith('providers.') && !options.key.startsWith('providers.minimax.')) {
+    const providerId = getNestedPathParts(options.key)[1];
+    if (options.key === `providers.${providerId}`) {
+      validateModelProviderConfig({ [providerId as string]: toProviderModelConfig(options.value) });
+    } else if (isProviderBaseUrlPath(options.key)) {
+      validateProviderBaseUrl(options.value);
+    }
+  }
   validateProxyUrl(getProxyUrlCandidate(options.key, options.value));
 
   const targetPath = layer === 'project' ? getProjectWritePath() : getUserConfigPath();

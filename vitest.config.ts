@@ -1,6 +1,14 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)));
+const stableCoverageRoot = process.platform === 'win32'
+  ? projectRoot.replace(/^[A-Z]:/, (drive) => drive.toLowerCase())
+  : projectRoot;
+
 export default defineConfig({
+  root: stableCoverageRoot,
   test: {
     include: ['tests/**/*.test.ts'],
     coverage: {

@@ -13,15 +13,20 @@ export type TokenConfig = {
 
 export type ModelPreference = 'haiku' | 'sonnet' | 'opus' | 'minimax';
 
-export type ModelProviderId = 'minimax';
+export type ModelProviderId = 'minimax' | string;
+export type ExecutionModelId = string;
 
-export type MiniMaxProviderConfig = {
+export type ProviderModelConfig = {
+  model?: ExecutionModelId;
   baseUrl?: string;
   apiKey?: string;
 };
 
+export type MiniMaxProviderConfig = ProviderModelConfig;
+
 export type ModelProviderConfig = {
   minimax?: MiniMaxProviderConfig;
+  [providerId: string]: ProviderModelConfig | undefined;
 };
 
 export type ProxyConfig = {
@@ -46,6 +51,8 @@ export type PeaksConfig = {
   workspaces: WorkspaceConfig[];
   language: string;
   model: ModelPreference;
+  economyMode: boolean;
+  swarmMode: boolean;
   tokens: TokenConfig;
   providers: ModelProviderConfig;
   proxy: ProxyConfig;
@@ -70,7 +77,13 @@ export const DEFAULT_CONFIG: PeaksConfig = {
   workspaces: [],
   language: 'en',
   model: 'sonnet',
+  economyMode: true,
+  swarmMode: true,
   tokens: {},
-  providers: {},
+  providers: {
+    minimax: {
+      model: 'minimax-2.7'
+    }
+  },
   proxy: {}
 };

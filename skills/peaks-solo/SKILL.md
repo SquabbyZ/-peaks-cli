@@ -31,6 +31,10 @@ Peaks Solo must not silently:
 
 Use the Peaks CLI for runtime side effects.
 
+## Project standards preflight
+
+Before orchestrating an end-to-end code repository workflow, automatically gather the project standards preflight status from RD and QA. If project-local standards are missing, present the standards init dry-run plan before implementation starts. Apply the standards only when write authorization exists; otherwise keep it as a next action and continue only when the selected workflow can safely proceed without writing standards.
+
 ## Refactor mode
 
 Read `references/refactor-mode.md` before handling refactor requests.

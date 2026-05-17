@@ -30,6 +30,48 @@ export const seedCapabilityItems: CapabilityItem[] = [
     presentation: { displayName: { en: 'Security Review Agent', 'zh-CN': '安全评审代理' }, description: { en: 'Checks auth, user input, filesystem, external calls, and secret-handling risks.', 'zh-CN': '检查认证、用户输入、文件系统、外部调用和密钥处理风险。' } }
   },
   {
+    capabilityId: 'everything-claude-code.language-standards',
+    sourceId: 'everything-claude-code',
+    name: 'Language Coding Standards',
+    itemType: 'rule',
+    category: 'coding-standards',
+    workflows: ['code-refactor', 'development-start', 'project-standards'],
+    audience: ['engineer'],
+    riskLevel: 'low',
+    inputContract: 'project-language and existing project standards',
+    outputContract: 'project-local rules baseline',
+    fallback: { mode: 'peaks-built-in-standards', qualityImpact: 'same', nextAction: 'Use Peaks curated baseline and preserve existing project conventions.' },
+    presentation: { displayName: { en: 'Language Coding Standards', 'zh-CN': '语言编码规范' }, description: { en: 'Provides language coding standards for project-local Peaks rules.', 'zh-CN': '为项目内 Peaks 规则提供语言编码规范来源。' } }
+  },
+  {
+    capabilityId: 'everything-claude-code.code-review-guidance',
+    sourceId: 'everything-claude-code',
+    name: 'Code Review Guidance',
+    itemType: 'rule',
+    category: 'code-review',
+    workflows: ['code-refactor', 'development-complete', 'project-standards'],
+    audience: ['engineer', 'qa'],
+    riskLevel: 'low',
+    inputContract: 'project-local diff and test evidence',
+    outputContract: 'code-review rules baseline',
+    fallback: { mode: 'peaks-built-in-review-checklist', qualityImpact: 'same', nextAction: 'Use Peaks curated code review baseline if the external source is unavailable.' },
+    presentation: { displayName: { en: 'Code Review Guidance', 'zh-CN': '代码评审指导' }, description: { en: 'Provides review guidance for project-local Peaks rules and QA preflight.', 'zh-CN': '为项目内 Peaks 规则和 QA preflight 提供代码评审指导。' } }
+  },
+  {
+    capabilityId: 'everything-claude-code.security-review-guidance',
+    sourceId: 'everything-claude-code',
+    name: 'Security Review Guidance',
+    itemType: 'rule',
+    category: 'security-review',
+    workflows: ['code-refactor', 'development-complete', 'project-standards'],
+    audience: ['engineer', 'qa'],
+    riskLevel: 'low',
+    inputContract: 'project-local diff and sensitive-boundary summary',
+    outputContract: 'security-review rules baseline',
+    fallback: { mode: 'peaks-built-in-security-checklist', qualityImpact: 'same', nextAction: 'Use Peaks curated security baseline if the external source is unavailable.' },
+    presentation: { displayName: { en: 'Security Review Guidance', 'zh-CN': '安全评审指导' }, description: { en: 'Provides security review guidance for project-local Peaks rules and QA preflight.', 'zh-CN': '为项目内 Peaks 规则和 QA preflight 提供安全评审指导。' } }
+  },
+  {
     capabilityId: 'context7.docs-lookup',
     sourceId: 'context7',
     name: 'Context7 Docs Lookup',

@@ -16,6 +16,10 @@ Peaks QA proves that planned changes are protected and accepted.
 - validate that implementation satisfies the spec;
 - record residual risks.
 
+## Project standards preflight
+
+Before QA verification in a code repository, automatically check whether project-local code review and security review standards exist under `.claude/rules`. If they are missing, consume the standards init dry-run plan as a preflight next action. Apply it only when write authorization exists; otherwise ask for confirmation. Treat `everything-claude-code` as curated review guidance, not executable external content.
+
 ## Refactor role
 
 For refactors, QA must be involved before implementation. It defines the regression and acceptance surface, then verifies the same surface after implementation.

@@ -45,6 +45,7 @@ describe('createRdSwarmPlan', () => {
 
     expect(plan.available).toBe(true);
     if (!plan.available) return;
+    expect(plan.swarmMode).toBe(true);
     expect(plan.workerTarget).toBe(40);
     expect(plan.waves.map((wave) => wave.name)).toEqual(['discovery', 'planning', 'implementation candidates', 'quality gates', 'reducer']);
     expect(plan.tasks.length).toBeGreaterThanOrEqual(25);
@@ -74,6 +75,25 @@ describe('createRdSwarmPlan', () => {
     expect(plan.tasks.filter((task) => task.wave === 'implementation candidates').every((task) => task.dependsOn.length === 8)).toBe(true);
     expect(plan.tasks.filter((task) => task.wave === 'quality gates').every((task) => task.dependsOn.length === plan.waves[2]?.taskIds.length)).toBe(true);
     expect(plan.tasks.filter((task) => task.wave === 'reducer').every((task) => task.dependsOn.length === 6)).toBe(true);
+  });
+
+  test('blocks RD swarm planning when tech approval is required but not approved', () => {
+    const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
+    const architectureRoot = join(artifactWorkspace, '.peaks', 'changes', 'checkout-refactor', 'architecture');
+    mkdirSync(architectureRoot, { recursive: true });
+    for (const artifact of TECH_REQUIRED_ARTIFACTS) {
+      writeFileSync(join(architectureRoot, artifact), artifact === 'tech-approval-record.md' ? 'status: pending' : 'ready', 'utf8');
+    }
+
+    const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Implement approved checkout refactor', maxWorkers: 40, dryRun: true, artifactWorkspacePath: artifactWorkspace, workspace });
+
+    expect(plan.available).toBe(false);
+    expect(plan.swarmMode).toBe(true);
+    expect(plan.tasks).toEqual([]);
+    expect(plan.gateStatus.techApprovalRequired).toBe(true);
+    expect(plan.gateStatus.techStatus).not.toBe('approved');
+    expect(plan.blockedReasons).toContain('tech-approval-required');
+    expect(plan.nextActions).toEqual(['Run peaks tech plan --dry-run and approve the tech plan before running peaks swarm plan.']);
   });
 
   test('derives implementation target areas from approved tech artifacts', () => {
@@ -584,8 +604,34 @@ describe('createRdSwarmPlan', () => {
 
     expect(plan.available).toBe(false);
     if (plan.available) return;
+    expect(plan.swarmMode).toBe(true);
     expect(plan.behavior).toBe('preview');
     expect(plan.reason).toContain('artifact-workspace-unavailable');
+  });
+
+  test('does not create worker waves when swarm mode is explicitly disabled', () => {
+    const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Fix checkout retry typo', maxWorkers: 25, swarmMode: false, dryRun: true });
+
+    expect(plan.available).toBe(false);
+    if (plan.available) return;
+    expect(plan.swarmMode).toBe(false);
+    expect(plan.waves).toEqual([]);
+    expect(plan.tasks).toEqual([]);
+    expect(plan.conflictGroups).toEqual([]);
+    expect(plan.gateStatus.skipReason).toBe('tech-gate-skipped-clear-implementation-path');
+    expect(plan.blockedReasons).not.toContain('swarm-mode-disabled');
+  });
+
+  test('does not mark the tech gate skipped when swarm mode is disabled for governed goals', () => {
+    const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Implement approved checkout refactor', maxWorkers: 25, swarmMode: false, dryRun: true });
+
+    expect(plan.available).toBe(false);
+    if (plan.available) return;
+    expect(plan.swarmMode).toBe(false);
+    expect(plan.gateStatus.techApprovalRequired).toBe(true);
+    expect(plan.gateStatus.skipReason).toBeUndefined();
+    expect(plan.waves).toEqual([]);
+    expect(plan.tasks).toEqual([]);
   });
 
   test('returns preview when artifact workspace path has no marker', () => {

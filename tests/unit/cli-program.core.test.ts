@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { parseJsonOutput, resetCliProgramMocks, runCommand, writeUserConfig } from './cli-program-test-utils.js';
 
@@ -80,6 +83,54 @@ describe('createProgram', () => {
     const output = parseJsonOutput(result.stdout);
 
     expect(JSON.stringify(output.data)).toContain('Require UT coverage >= 95%');
+  });
+
+  test('prints standards init dry-run as JSON envelope', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-standards-'));
+    const result = await runCommand(['standards', 'init', '--project', projectRoot, '--language', 'typescript', '--json']);
+    const output = parseJsonOutput<{ apply: boolean; language: string; skillPreflight: { appliesTo: string[] }; plannedWrites: Array<{ relativePath: string; status: string }> }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('standards.init');
+    expect(output.data.apply).toBe(false);
+    expect(output.data.language).toBe('typescript');
+    expect(output.data.skillPreflight.appliesTo).toEqual(['peaks-rd', 'peaks-qa', 'peaks-solo']);
+    expect(output.data.plannedWrites.map((write) => write.relativePath)).toContain('.claude/rules/common/security.md');
+  });
+
+  test('applies standards init with detected language when language is omitted', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-standards-apply-'));
+    writeFileSync(join(projectRoot, 'tsconfig.json'), '{}', 'utf8');
+
+    const result = await runCommand(['standards', 'init', '--project', projectRoot, '--apply', '--json']);
+    const output = parseJsonOutput<{ apply: boolean; language: string; writtenFiles: string[] }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('standards.init');
+    expect(output.data.apply).toBe(true);
+    expect(output.data.language).toBe('typescript');
+    expect(output.data.writtenFiles).toContain('CLAUDE.md');
+    expect(existsSync(join(projectRoot, 'CLAUDE.md'))).toBe(true);
+  });
+
+  test('rejects conflicting standards init dry-run and apply flags', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-standards-conflict-'));
+    const result = await runCommand(['standards', 'init', '--project', projectRoot, '--dry-run', '--apply', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_STANDARDS_INIT_FLAGS');
+    expect(result.exitCode).toBe(1);
+    expect(existsSync(join(projectRoot, 'CLAUDE.md'))).toBe(false);
+  });
+
+  test('rejects invalid standards language', async () => {
+    const result = await runCommand(['standards', 'init', '--project', process.cwd(), '--language', 'type/script', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('STANDARDS_INIT_FAILED');
+    expect(result.exitCode).toBe(1);
   });
 
   test('prints tech plan dry run', async () => {
@@ -268,6 +319,80 @@ describe('createProgram', () => {
     expect(output.ok).toBe(true);
     expect(output.command).toBe('swarm.plan');
     expect(JSON.stringify(output.data)).toContain('reducer-report.md');
+  });
+
+  test('routes direct swarm plan execution workers to configured model when economy mode is enabled', async () => {
+    writeUserConfig({
+      version: '0.1.0',
+      currentWorkspace: null,
+      workspaces: [],
+      language: 'en',
+      model: 'sonnet',
+      economyMode: true,
+      swarmMode: true,
+      tokens: {},
+      providers: { customProvider: { model: 'custom-exec-model-v1' } },
+      proxy: {}
+    });
+
+    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-economy-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
+    const output = parseJsonOutput<{ tasks: Array<{ wave: string; modelRole: string; modelId: string }> }>(result.stdout);
+    const executionTasks = output.data.tasks.filter((task) => task.wave === 'implementation candidates');
+
+    expect(output.ok).toBe(true);
+    expect(executionTasks.length).toBeGreaterThan(0);
+    expect(executionTasks.every((task) => task.modelRole === 'execution' && task.modelId === 'custom-exec-model-v1')).toBe(true);
+  });
+
+  test('routes direct swarm plan execution workers to strongest model when economy mode is disabled', async () => {
+    writeUserConfig({
+      version: '0.1.0',
+      currentWorkspace: null,
+      workspaces: [],
+      language: 'en',
+      model: 'sonnet',
+      economyMode: false,
+      swarmMode: true,
+      tokens: {},
+      providers: { minimax: { model: 'minimax-2.7' } },
+      proxy: {}
+    });
+
+    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-no-economy-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
+    const output = parseJsonOutput<{ tasks: Array<{ wave: string; modelRole: string; modelId: string }> }>(result.stdout);
+    const executionTasks = output.data.tasks.filter((task) => task.wave === 'implementation candidates');
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('swarm.plan');
+    expect(executionTasks.length).toBeGreaterThan(0);
+    expect(executionTasks.every((task) => task.modelRole === 'execution' && task.modelId === 'claude-opus-4-7')).toBe(true);
+    expect(executionTasks.some((task) => task.modelId === 'minimax-2.7')).toBe(false);
+  });
+
+  test('bypasses direct swarm plan worker graph when swarm mode is disabled', async () => {
+    writeUserConfig({
+      version: '0.1.0',
+      currentWorkspace: null,
+      workspaces: [],
+      language: 'en',
+      model: 'sonnet',
+      economyMode: true,
+      swarmMode: false,
+      tokens: {},
+      providers: { minimax: { model: 'minimax-2.7' } },
+      proxy: {}
+    });
+
+    const result = await runCommand(['swarm', 'plan', '--skill', 'rd', '--change-id', 'cli-no-swarm', '--goal', 'Fix checkout retry typo', '--max-workers', '40', '--dry-run', '--json']);
+    const output = parseJsonOutput<{ swarmMode: boolean; waves: unknown[]; tasks: unknown[]; conflictGroups: unknown[]; blockedReasons: string[] }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('swarm.plan');
+    expect(output.data.swarmMode).toBe(false);
+    expect(output.data.waves).toEqual([]);
+    expect(output.data.tasks).toEqual([]);
+    expect(output.data.conflictGroups).toEqual([]);
+    expect(output.data.blockedReasons).not.toContain('swarm-mode-disabled');
   });
 
   test('rejects unsupported swarm skill', async () => {

@@ -129,17 +129,21 @@ describe('secret config handling', () => {
           baseUrl: 'https://api.minimaxi.com/anthropic',
           apiKey: { value: 'plain-secret' },
           emptyToken: ''
+        },
+        customProvider: {
+          baseUrl: 'https://user:pass@example.com/anthropic?token=secret#key=secret'
         }
       },
       list: [{ token: ['token-secret'] }]
     };
 
     const redacted = redactConfigSecrets(config);
-    const redactedConfig = redacted as { providers: { minimax: { baseUrl: string; apiKey: string; emptyToken: string } }; list: { token: string }[] };
+    const redactedConfig = redacted as { providers: { minimax: { baseUrl: string; apiKey: string; emptyToken: string }; customProvider: { baseUrl: string } }; list: { token: string }[] };
 
     expect(redactedConfig.providers.minimax.baseUrl).toBe('https://api.minimaxi.com/anthropic');
     expect(redactedConfig.providers.minimax.apiKey).toBe('***');
     expect(redactedConfig.providers.minimax.emptyToken).toBe('***');
+    expect(redactedConfig.providers.customProvider.baseUrl).toBe('https://example.com/anthropic');
     expect(redactedConfig.list[0]?.token).toBe('***');
     expect(config.providers.minimax.apiKey.value).toBe('plain-secret');
   });
@@ -156,6 +160,20 @@ describe('secret config handling', () => {
     expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://example.com/anthropic' })).toThrow('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
 
     expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://api.minimaxi.com/anthropic' })).not.toThrow();
+  });
+
+  test('rejects unsafe generic provider base URLs', () => {
+    expect(() => setConfig({ key: 'providers.customProvider.baseUrl', value: 'http://example.com/anthropic' })).toThrow('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+    expect(() => setConfig({ key: 'providers.customProvider.baseUrl', value: 'https://user:pass@example.com/anthropic' })).toThrow('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+    expect(() => setConfig({ key: 'providers.customProvider.baseUrl', value: 'https://example.com/anthropic?apiKey=secret' })).toThrow('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+    expect(() => setConfig({ key: 'providers.customProvider.baseUrl', value: 'https://example.com/anthropic#token=secret' })).toThrow('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+    expect(() => setConfig({ key: 'providers.customProvider', value: { baseUrl: 'http://example.com/anthropic' } })).toThrow('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+    expect(() => setConfig({ key: 'providers', value: { customProvider: { baseUrl: 'https://user:pass@example.com/anthropic' } } })).toThrow('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+    expect(() => writeConfig({ providers: { customProvider: { baseUrl: 'https://example.com/anthropic?apiKey=secret' } } }, 'user')).toThrow('Provider base URL must be HTTPS without embedded credentials, query, or fragment');
+
+    expect(() => setConfig({ key: 'providers.customProvider.baseUrl', value: 'https://example.com/anthropic' })).not.toThrow();
+    expect(() => setConfig({ key: 'providers.customProvider', value: { baseUrl: 'https://example.com/anthropic' } })).not.toThrow();
+    expect(() => setConfig({ key: 'providers', value: { customProvider: { baseUrl: 'https://example.com/anthropic' } } })).not.toThrow();
   });
 
   test('reads configurable HTTP proxy with validation and no default', () => {
@@ -212,8 +230,9 @@ describe('secret config handling', () => {
   });
 
   test('normalizes external config shapes before exposing provider config', () => {
-    writeConfig({ providers: { minimax: { baseUrl: 'https://api.minimaxi.com/anthropic', apiKey: 123 as unknown as string } as never } }, 'user');
+    writeConfig({ providers: { minimax: { model: 'minimax-2.7', baseUrl: 'https://api.minimaxi.com/anthropic', apiKey: 123 as unknown as string } as never } }, 'user');
     const providerConfig = getMiniMaxProviderConfig();
+    expect(providerConfig.model).toBe('minimax-2.7');
     expect(providerConfig.baseUrl).toBe('https://api.minimaxi.com/anthropic');
     expect(providerConfig.apiKey).toBeUndefined();
   });
@@ -292,7 +311,7 @@ describe('project config discovery', () => {
 
     const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
     try {
-      expect(readConfig()).toMatchObject({ language: 'zh', model: 'minimax' });
+      expect(readConfig()).toMatchObject({ language: 'zh', model: 'minimax', economyMode: true, swarmMode: true });
       expect(getConfig()).toMatchObject({ language: 'zh', model: 'minimax' });
     } finally {
       cwdSpy.mockRestore();
@@ -346,9 +365,12 @@ describe('config types', () => {
       workspaces: [],
       language: 'en',
       model: 'sonnet' as const,
+      economyMode: true,
+      swarmMode: true,
       tokens: { GitHubToken: { env: 'GH_TOKEN' } },
       providers: {
         minimax: {
+          model: 'minimax-2.7',
           baseUrl: 'https://api.minimaxi.com/anthropic',
           apiKey: 'test-key'
         }
@@ -358,6 +380,9 @@ describe('config types', () => {
     expect(config.version).toBe('0.1.0');
     expect(config.currentWorkspace).toBe('ws1');
     expect(config.model).toBe('sonnet');
+    expect(config.economyMode).toBe(true);
+    expect(config.swarmMode).toBe(true);
+    expect(config.providers.minimax?.model).toBe('minimax-2.7');
     expect(config.providers.minimax?.baseUrl).toBe('https://api.minimaxi.com/anthropic');
   });
 });
@@ -372,7 +397,9 @@ describe('CLI integration via program', () => {
     expect(DEFAULT_CONFIG.version).toBe('0.1.0');
     expect(DEFAULT_CONFIG.language).toBe('en');
     expect(DEFAULT_CONFIG.model).toBe('sonnet');
-    expect(DEFAULT_CONFIG.providers).toEqual({});
+    expect(DEFAULT_CONFIG.economyMode).toBe(true);
+    expect(DEFAULT_CONFIG.swarmMode).toBe(true);
+    expect(DEFAULT_CONFIG.providers.minimax?.model).toBe('minimax-2.7');
     expect(DEFAULT_CONFIG.proxy).toEqual({});
   });
 

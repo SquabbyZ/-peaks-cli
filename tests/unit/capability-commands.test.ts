@@ -9,6 +9,8 @@ function createConfig(currentWorkspace: string | null): PeaksConfig {
     workspaces: [{ workspaceId: 'ws-a', name: 'Workspace A', rootPath: '/tmp/ws-a', installedCapabilityIds: ['context7.docs-lookup'] }],
     language: 'en',
     model: 'sonnet',
+    economyMode: true,
+    swarmMode: true,
     tokens: {},
     providers: {},
     proxy: {}

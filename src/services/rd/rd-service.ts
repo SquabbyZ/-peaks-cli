@@ -11,7 +11,6 @@ export type RdWaveName = 'discovery' | 'planning' | 'implementation candidates' 
 export type RdModelRole = 'strongest' | 'execution';
 
 const STRONGEST_MODEL_ID = 'claude-opus-4-7' as const;
-const EXECUTION_MODEL_ID = 'minimax-2.7' as const;
 
 export type RdSwarmPlanRequest = {
   skill: RdSkill;
@@ -19,9 +18,11 @@ export type RdSwarmPlanRequest = {
   goal: string;
   maxWorkers: number;
   dryRun: true;
+  swarmMode?: boolean;
   artifactWorkspacePath?: string;
   workspace?: WorkspaceConfig;
   requiresTechApproval?: boolean;
+  executionModelId?: string;
 };
 
 export type RdTask = {
@@ -30,7 +31,7 @@ export type RdTask = {
   workerKind: string;
   purpose: string;
   modelRole: RdModelRole;
-  modelId: typeof STRONGEST_MODEL_ID | typeof EXECUTION_MODEL_ID;
+  modelId: string;
   inputs: string[];
   outputs: [string, ...string[]];
   dependsOn: string[];
@@ -56,6 +57,7 @@ export type RdPlanResult =
       available: true;
       changeId: string;
       goal: string;
+      swarmMode: boolean;
       workerTarget: number;
       waves: RdWave[];
       tasks: RdTask[];
@@ -79,6 +81,7 @@ export type RdPlanResult =
       available: false;
       behavior: 'preview' | 'blocked';
       reason: string;
+      swarmMode: boolean;
       workerTarget: number;
       waves: RdWave[];
       tasks: RdTask[];
@@ -193,8 +196,8 @@ function getTaskModelRole(wave: RdWaveName): RdModelRole {
   return wave === 'implementation candidates' ? 'execution' : 'strongest';
 }
 
-function getTaskModelId(modelRole: RdModelRole): typeof STRONGEST_MODEL_ID | typeof EXECUTION_MODEL_ID {
-  return modelRole === 'execution' ? EXECUTION_MODEL_ID : STRONGEST_MODEL_ID;
+function getTaskModelId(modelRole: RdModelRole, executionModelId: string): string {
+  return modelRole === 'execution' ? executionModelId : STRONGEST_MODEL_ID;
 }
 
 const MAX_ARTIFACT_BYTES = 256_000;
@@ -265,6 +268,8 @@ function getConcreteTargetAreas(request: RdSwarmPlanRequest, hasApprovedTechArti
 function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { available: true }>, 'available'> {
   validateChangeIdOrThrow(request.changeId);
   const goal = normalizeGoal(request.goal);
+  const swarmMode = request.swarmMode ?? true;
+  const executionModelId = request.executionModelId?.trim() || 'minimax-2.7';
   const { workerTarget, blockedReasons } = resolveWorkerTarget(request.maxWorkers);
   const artifactRoot = buildArtifactRelativePath(request.changeId, 'swarm');
   const techStatus = getTechStatus({
@@ -275,10 +280,37 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
   const requiresTechApproval = request.requiresTechApproval ?? !isClearLowRiskGoal(goal);
   const techGateSkipped = !requiresTechApproval;
 
+  if (!swarmMode) {
+    return {
+      changeId: request.changeId,
+      goal,
+      swarmMode,
+      workerTarget,
+      waves: [],
+      tasks: [],
+      conflictGroups: [],
+      artifactRoot,
+      outputs: {
+        taskGraph: buildArtifactRelativePath(request.changeId, 'swarm', 'task-graph.json'),
+        waveManifests: [],
+        workerBriefs: [],
+        reducerReport: buildArtifactRelativePath(request.changeId, 'swarm', 'reducer-report.md'),
+      },
+      gateStatus: {
+        techApprovalRequired: requiresTechApproval,
+        techStatus: techStatus.status,
+        ...(techGateSkipped ? { skipReason: 'tech-gate-skipped-clear-implementation-path' } : {}),
+      },
+      blockedReasons,
+      nextActions: [],
+    };
+  }
+
   if (requiresTechApproval && techStatus.status !== 'approved') {
     return {
       changeId: request.changeId,
       goal,
+      swarmMode,
       workerTarget,
       waves: [],
       tasks: [],
@@ -337,7 +369,7 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
       workerKind: taskId,
       purpose: `${taskId.replace(/^rd-/, '').replace(/-/g, ' ')} for ${goal}`,
       modelRole,
-      modelId: getTaskModelId(modelRole),
+      modelId: getTaskModelId(modelRole, executionModelId),
       inputs: [goal, artifactRoot],
       outputs: [briefPath] as [string, ...string[]],
       dependsOn: [...waveDependencies[wave]],
@@ -357,6 +389,7 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
   return {
     changeId: request.changeId,
     goal,
+    swarmMode,
     workerTarget,
     waves,
     tasks,
@@ -389,6 +422,7 @@ export function createRdSwarmPlan(request: RdSwarmPlanRequest): RdPlanResult {
       available: false,
       behavior: 'preview',
       reason: 'artifact-workspace-unavailable',
+      swarmMode: result.swarmMode,
       workerTarget: result.workerTarget,
       waves: result.waves,
       tasks: result.tasks,
@@ -407,6 +441,7 @@ export function createRdSwarmPlan(request: RdSwarmPlanRequest): RdPlanResult {
       available: false,
       behavior: 'blocked',
       reason: blockedReason,
+      swarmMode: result.swarmMode,
       workerTarget: result.workerTarget,
       waves: result.waves,
       tasks: result.tasks,

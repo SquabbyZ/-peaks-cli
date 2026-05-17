@@ -16,6 +16,10 @@ Peaks RD owns engineering analysis, implementation planning, and refactor execut
 - generate refactor options, risk matrix, rollback plan, and task graph preview;
 - implement only after strict specs and confirmations exist.
 
+## Project standards preflight
+
+Before RD planning or implementation work in a code repository, automatically check whether the target project has `CLAUDE.md` and `.claude/rules` project standards. If they are missing, generate a standards init dry-run plan through the Peaks runtime and surface it as a preflight next action. Apply it only when write authorization exists; otherwise ask for confirmation. Use `everything-claude-code` only as a curated standards source, never as unreviewed executable content.
+
 ## Refactor hard gates
 
 If a request is refactor, cleanup, architecture adjustment, module split, or technical debt work:

@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { buildArtifactRelativePath, validateChangeIdOrThrow } from '../../shared/change-id.js';
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
 import { hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
-import type { WorkspaceConfig } from '../config/config-types.js';
+import type { ModelProviderConfig, WorkspaceConfig } from '../config/config-types.js';
 import { createRdSwarmPlan, type RdPlanResult } from '../rd/rd-service.js';
 import { createWorkflowRouterPlan, type SoloMode, type WorkflowMode, type WorkflowRouterPlan } from './workflow-router-service.js';
 
@@ -39,6 +39,11 @@ export type AutonomousWorkflowRequest = {
   readonly dryRun: true;
   readonly artifactWorkspacePath?: string;
   readonly workspace?: WorkspaceConfig;
+  readonly config?: {
+    readonly economyMode?: boolean;
+    readonly swarmMode?: boolean;
+    readonly providers?: ModelProviderConfig;
+  };
 };
 
 export type AutonomousGoalPackage = {
@@ -469,6 +474,7 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     goal,
     maxWorkers,
     dryRun: true,
+    ...(request.config ? { config: request.config } : {}),
     ...sharedWorkspaceOptions
   });
   const rdPlan = createRdSwarmPlan({
@@ -477,6 +483,8 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     goal,
     maxWorkers,
     dryRun: true,
+    ...(request.config?.swarmMode !== undefined ? { swarmMode: request.config.swarmMode } : {}),
+    executionModelId: routePlan.modeStatus.executionModelId,
     ...sharedWorkspaceOptions
   });
   const requiredArtifacts = getResumeRequiredArtifacts(request.changeId);

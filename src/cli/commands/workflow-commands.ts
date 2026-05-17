@@ -5,8 +5,9 @@ import { createWorkflowRouterPlan, isSoloMode, isWorkflowMode, type SoloMode } f
 import { createAutonomousWorkflowPlan } from '../../services/workflow/workflow-autonomous-service.js';
 import { createRecommendationPlan } from '../../services/recommendations/recommendation-service.js';
 import { createRefactorDryRun, type RefactorMode } from '../../services/refactor/refactor-service.js';
-import { getCurrentWorkspaceConfig } from '../../services/config/config-service.js';
+import { getCurrentWorkspaceConfig, readConfig } from '../../services/config/config-service.js';
 import type { WorkspaceConfig } from '../../services/config/config-types.js';
+import { getEconomyAwareExecutionModelId } from '../../services/config/model-routing.js';
 import { getLocalArtifactPath } from '../../services/artifacts/workspace-service.js';
 import { fail, ok } from '../../shared/result.js';
 import { addJsonOption, failUnsupportedNonDryRun, getErrorMessage, isRecommendationWorkflow, printResult, type ProgramIO } from '../cli-helpers.js';
@@ -142,6 +143,7 @@ function runWorkflowRoute(io: ProgramIO, options: WorkflowRouteOptions): void {
       ...(soloMode ? { soloMode } : {}),
       maxWorkers,
       dryRun: true,
+      config: readConfig(),
       ...workspaceContext
     });
     printResult(io, ok('workflow.route', plan), options.json);
@@ -178,6 +180,7 @@ function runAutonomousWorkflow(io: ProgramIO, options: WorkflowRouteOptions): vo
       ...(soloMode ? { soloMode } : {}),
       maxWorkers,
       dryRun: true,
+      config: readConfig(),
       ...workspaceContext
     });
     printResult(io, ok('workflow.autonomous', plan), options.json);
@@ -204,12 +207,15 @@ function runSwarmPlan(io: ProgramIO, options: SwarmPlanOptions): void {
 
   try {
     const workspaceContext = getWorkspaceContext();
+    const config = readConfig();
     const plan = createRdSwarmPlan({
       skill: 'rd',
       changeId: options.changeId,
       goal: options.goal,
       maxWorkers,
       dryRun: true,
+      swarmMode: config.swarmMode,
+      executionModelId: getEconomyAwareExecutionModelId(config),
       ...workspaceContext
     });
     printResult(io, ok('swarm.plan', plan), options.json);

@@ -107,4 +107,18 @@ describe('createCapabilityMapPlan', () => {
 
     expect(everythingMappings.map((mapping) => mapping.capabilityId)).toEqual([...everythingMappings.map((mapping) => mapping.capabilityId)].sort());
   });
+
+  test('maps everything-claude-code standards guidance into Peaks code workflow skills', () => {
+    const plan = createCapabilityMapPlan({ source: 'mcp-server' });
+    const standardsItem = plan.items.find((item) => item.capabilityId === 'everything-claude-code.language-standards');
+    const standardsMapping = plan.mappings.find((mapping) => mapping.capabilityId === 'everything-claude-code.language-standards');
+    const reviewMapping = plan.mappings.find((mapping) => mapping.capabilityId === 'everything-claude-code.code-review-guidance');
+    const securityMapping = plan.mappings.find((mapping) => mapping.capabilityId === 'everything-claude-code.security-review-guidance');
+
+    expect(standardsItem?.itemType).toBe('rule');
+    expect(standardsItem?.presentation.displayName['zh-CN']).toContain('语言编码规范');
+    expect(standardsMapping?.skillName).toBe('peaks-rd');
+    expect(reviewMapping?.skillName).toBe('peaks-qa');
+    expect(securityMapping?.skillName).toBe('peaks-qa');
+  });
 });

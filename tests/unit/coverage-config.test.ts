@@ -13,4 +13,13 @@ describe('coverage configuration', () => {
     expect(source).toContain('branches: 100');
     expect(source).toContain('statements: 100');
   });
+
+  test('normalizes Windows coverage root without disabling included-file coverage', async () => {
+    const source = await readFile(vitestConfigPath, 'utf8');
+
+    expect(source).toContain('root: stableCoverageRoot');
+    expect(source).toContain("process.platform === 'win32'");
+    expect(source).toContain('toLowerCase()');
+    expect(source).not.toContain('all: false');
+  });
 });

@@ -149,6 +149,18 @@ describe('testMiniMaxProvider', () => {
     await expect(runMiniMaxPrompt({ baseUrl: 'https://api.minimaxi.com/anthropic', apiKey: 'secret' }, { prompt: 'Say anything' }, fetchImpl)).resolves.toMatchObject({ ok: true, responseText: 'free-form response' });
   });
 
+  test('trims API keys before sending MiniMax prompt headers', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(createFetchResponse(200, { content: [{ type: 'text', text: 'free-form response' }] }));
+
+    await runMiniMaxPrompt({ baseUrl: 'https://api.minimaxi.com/anthropic', apiKey: '  secret-key  ' }, { prompt: 'Say anything' }, fetchImpl);
+
+    expect(fetchImpl).toHaveBeenCalledWith('https://api.minimaxi.com/anthropic/v1/messages', expect.objectContaining({
+      headers: expect.objectContaining({
+        'x-api-key': 'secret-key'
+      })
+    }));
+  });
+
   test('rejects sensitive model values before calling MiniMax', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
 

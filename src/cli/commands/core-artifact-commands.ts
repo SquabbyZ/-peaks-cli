@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { createArtifactInitPlan, getArtifactStatus, createGuidedArtifactSetup } from '../../services/artifacts/artifact-service.js';
 import { getArtifactWorkspaceStatus, planArtifactSync } from '../../services/artifacts/workspace-service.js';
 import { executeProjectMemoryBackup, executeProjectMemoryExtract, summarizeProjectMemoryBackupResult, summarizeProjectMemoryExtractResult } from '../../services/memory/project-memory-service.js';
+import { executeProjectStandardsInit, summarizeProjectStandardsInitResult } from '../../services/standards/project-standards-service.js';
 import { listProfiles } from '../../services/profiles/profile-service.js';
 import { planProxyTest } from '../../services/proxy/proxy-service.js';
 import { runDoctor } from '../../services/doctor/doctor-service.js';
@@ -39,6 +40,31 @@ export function registerCoreAndArtifactCommands(program: Command, io: ProgramIO)
   const profile = program.command('profile').description('Manage runtime profiles');
   addJsonOption(profile.command('list').description('List available profiles')).action((options: { json?: boolean }) => {
     printResult(io, ok('profile.list', { profiles: listProfiles() }), options.json);
+  });
+
+  const standards = program.command('standards').description('Manage project-local coding standards');
+  addJsonOption(
+    standards
+      .command('init')
+      .description('Initialize project-local coding standards for Peaks skill preflight')
+      .requiredOption('--project <path>', 'target project root')
+      .option('--language <language>', 'standards language pack')
+      .option('--dry-run', 'preview writes without changing files')
+      .option('--apply', 'write missing standards into the target project')
+  ).action((options: { project: string; language?: string; dryRun?: boolean; apply?: boolean; json?: boolean }) => {
+    if (options.dryRun === true && options.apply === true) {
+      printResult(io, fail('standards.init', 'INVALID_STANDARDS_INIT_FLAGS', 'Use either --dry-run or --apply, not both', {}, ['Run without --apply to preview writes, or omit --dry-run when applying standards']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const result = executeProjectStandardsInit({ projectRoot: options.project, ...(options.language !== undefined ? { language: options.language } : {}), apply: options.apply === true });
+      printResult(io, ok('standards.init', summarizeProjectStandardsInitResult(result)), options.json);
+    } catch (error) {
+      printResult(io, fail('standards.init', 'STANDARDS_INIT_FAILED', getErrorMessage(error), {}, ['Check the project path and existing .claude/rules directory before retrying']), options.json);
+      process.exitCode = 1;
+    }
   });
 
   const memory = program.command('memory').description('Manage project-local Peaks memory');

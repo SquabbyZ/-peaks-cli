@@ -77,11 +77,17 @@ describe('createWorkflowRouterPlan', () => {
     expect(rndPlan.steps.find((step) => step.stage === 'coding-execution')?.reason).toContain('[autonomous] execution stage');
   });
 
-  test('routes product design tech and review to strongest model while execution uses MiniMax 2.7', () => {
+  test('routes product design tech and review to strongest model while economy execution uses MiniMax 2.7', () => {
     const plan = createWorkflowRouterPlan({ changeId: 'model-routing', goal: 'Refactor checkout flow', mode: 'solo', dryRun: true });
 
+    expect(plan.modeStatus.economyModeEnabled).toBe(true);
+    expect(plan.modeStatus.swarmModeEnabled).toBe(true);
+    expect(plan.modeStatus.executionModelId).toBe('minimax-2.7');
+    expect(plan.modeStatus.summary).toContain('Economy mode enabled');
+    expect(plan.modeStatus.summary).toContain('Swarm mode enabled');
     expect(plan.modelRouting.strongestModel.modelId).toBe('claude-opus-4-7');
     expect(plan.modelRouting.executionModel.modelId).toBe('minimax-2.7');
+    expect(plan.techPlan.available ? plan.techPlan.swarm : plan.techPlan.preview.swarm).toBe(true);
     expect(plan.steps.filter((step) => step.stage !== 'coding-execution' && step.stage !== 'unit-test-execution').every((step) => step.modelRole === 'strongest')).toBe(true);
     expect(plan.steps.filter((step) => step.stage === 'coding-execution' || step.stage === 'unit-test-execution').every((step) => step.modelRole === 'execution')).toBe(true);
     expect(plan.steps.find((step) => step.stage === 'coding-execution')?.modelId).toBe('minimax-2.7');
@@ -89,6 +95,69 @@ describe('createWorkflowRouterPlan', () => {
     expect(plan.steps.find((step) => step.stage === 'quality-review')?.modelId).toBe('claude-opus-4-7');
     expect(plan.modelAssignments).toEqual(plan.steps.map((step) => ({ stage: step.stage, owner: step.owner, modelTier: step.modelTier, modelRole: step.modelRole, modelId: step.modelId })));
     expect(plan.modelAssignments.filter((assignment) => assignment.modelRole === 'execution').map((assignment) => assignment.stage)).toEqual(['coding-execution', 'unit-test-execution']);
+  });
+
+  test('routes code and test workers to strongest model when economy mode is disabled', () => {
+    const plan = createWorkflowRouterPlan({ changeId: 'no-economy-routing', goal: 'Refactor checkout flow', mode: 'solo', dryRun: true, config: { economyMode: false } });
+
+    expect(plan.modeStatus.economyModeEnabled).toBe(false);
+    expect(plan.modeStatus.executionModelId).toBe('claude-opus-4-7');
+    expect(plan.modeStatus.summary).toContain('Economy mode disabled');
+    expect(plan.modelRouting.executionModel.modelId).toBe('claude-opus-4-7');
+    expect(plan.steps.find((step) => step.stage === 'coding-execution')?.modelId).toBe('claude-opus-4-7');
+    expect(plan.steps.find((step) => step.stage === 'unit-test-execution')?.modelId).toBe('claude-opus-4-7');
+  });
+
+  test('routes team code and test workers to strongest top-tier model when economy mode is disabled', () => {
+    const plan = createWorkflowRouterPlan({ changeId: 'team-no-economy-routing', goal: 'Refactor checkout flow', mode: 'team', dryRun: true, config: { economyMode: false } });
+
+    expect(plan.mode).toBe('team');
+    expect(plan.modeStatus.economyModeEnabled).toBe(false);
+    expect(plan.modeStatus.executionModelId).toBe('claude-opus-4-7');
+    expect(plan.steps.find((step) => step.id === 'team-coding-execution')?.modelTier).toBe('top-tier');
+    expect(plan.steps.find((step) => step.id === 'team-unit-test-execution')?.modelTier).toBe('top-tier');
+    expect(plan.steps.find((step) => step.id === 'team-coding-execution')?.modelRole).toBe('execution');
+    expect(plan.steps.find((step) => step.id === 'team-unit-test-execution')?.modelRole).toBe('execution');
+    expect(plan.steps.find((step) => step.id === 'team-coding-execution')?.modelId).toBe('claude-opus-4-7');
+    expect(plan.steps.find((step) => step.id === 'team-unit-test-execution')?.modelId).toBe('claude-opus-4-7');
+  });
+
+  test('keeps swarm mode explicit and disables swarm planning only when config opts out', () => {
+    const plan = createWorkflowRouterPlan({ changeId: 'no-swarm-routing', goal: 'Fix checkout retry typo', mode: 'solo', dryRun: true, config: { swarmMode: false } });
+
+    expect(plan.modeStatus.swarmModeEnabled).toBe(false);
+    expect(plan.modeStatus.summary).toContain('Swarm mode disabled');
+    expect(plan.techPlan.available ? plan.techPlan.swarm : plan.techPlan.preview.swarm).toBe(false);
+    expect(plan.rdPlan.swarmMode).toBe(false);
+    expect(plan.rdPlan.tasks).toEqual([]);
+    expect(plan.blockedReasons).not.toContain('swarm-mode-disabled');
+  });
+
+  test('normalizes configured provider model before assigning execution workers', () => {
+    const plan = createWorkflowRouterPlan({ changeId: 'trimmed-provider-model', goal: 'Fix checkout retry typo', mode: 'solo', dryRun: true, config: { providers: { customProvider: { model: '  custom-exec-model-v1  ' } } } });
+
+    expect(plan.modeStatus.executionModelId).toBe('custom-exec-model-v1');
+    expect(plan.steps.find((step) => step.stage === 'coding-execution')?.modelId).toBe('custom-exec-model-v1');
+    expect(plan.rdPlan.available).toBe(false);
+    expect(plan.rdPlan.workerTarget).toBe(40);
+  });
+
+  test('propagates configured provider model into the RD swarm worker graph', () => {
+    const { workspace, artifactWorkspace } = createApprovedWorkspace('custom-provider-model');
+    const plan = createWorkflowRouterPlan({
+      changeId: 'custom-provider-model',
+      goal: 'Implement approved checkout refactor',
+      mode: 'solo',
+      maxWorkers: 40,
+      dryRun: true,
+      config: { providers: { customProvider: { model: 'custom-exec-model-v1' } } },
+      artifactWorkspacePath: artifactWorkspace,
+      workspace
+    });
+
+    expect(plan.modeStatus.executionModelId).toBe('custom-exec-model-v1');
+    expect(plan.modelRouting.executionModel.modelId).toBe('custom-exec-model-v1');
+    expect(plan.rdPlan.tasks.filter((task) => task.wave === 'implementation candidates').every((task) => task.modelId === 'custom-exec-model-v1')).toBe(true);
   });
 
   test('keeps missing artifact workspace as a preview-safe planning constraint', () => {
