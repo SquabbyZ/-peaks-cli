@@ -158,12 +158,56 @@ describe('secret config handling', () => {
     expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://api.minimaxi.com/anthropic' })).not.toThrow();
   });
 
+  test('reads configurable HTTP proxy with validation and no default', () => {
+    expect(readConfig().proxy.httpProxy).toBeUndefined();
+
+    writeConfig({ proxy: { httpProxy: 'https://proxy.example:8443' } }, 'user');
+    expect(readConfig().proxy.httpProxy).toBe('https://proxy.example:8443');
+
+    expect(() => setConfig({ key: 'proxy.httpProxy', value: '127.0.0.1:58309' })).toThrow('Proxy URL must be an HTTP or HTTPS URL without embedded credentials');
+    expect(() => setConfig({ key: 'proxy.httpProxy', value: 'http://user:pass@127.0.0.1:58309' })).toThrow('Proxy URL must be an HTTP or HTTPS URL without embedded credentials');
+    expect(() => setConfig({ key: 'proxy.httpProxy', value: 'https://proxy.example:8443/route?token=secret' })).toThrow('Proxy URL must be an HTTP or HTTPS URL without embedded credentials');
+    expect(() => setConfig({ key: 'proxy.httpProxy', value: 'http://127.0.0.1:58309' })).not.toThrow();
+  });
+
+  test('keeps project proxy from overriding user proxy', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-config-root-'));
+    mkdirSync(join(projectRoot, '.peaks'), { recursive: true });
+    writeConfig({ proxy: { httpProxy: 'https://user-proxy.example:8443' } }, 'user');
+    writeFileSync(join(projectRoot, '.peaks', 'config.json'), JSON.stringify({ proxy: { httpProxy: 'https://project-proxy.example:8443' } }), 'utf8');
+
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+    try {
+      expect(readConfig().proxy.httpProxy).toBe('https://user-proxy.example:8443');
+      expect(getConfig()).toMatchObject({ proxy: { httpProxy: 'https://user-proxy.example:8443' } });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  test('ignores project-only proxy config', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-config-root-'));
+    mkdirSync(join(projectRoot, '.peaks'), { recursive: true });
+    writeConfig({ proxy: {} }, 'user');
+    writeFileSync(join(projectRoot, '.peaks', 'config.json'), JSON.stringify({ proxy: { httpProxy: 'https://project-proxy.example:8443' } }), 'utf8');
+
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+    try {
+      expect(readConfig().proxy.httpProxy).toBeUndefined();
+      expect(getConfig({ key: 'proxy.httpProxy' })).toBeUndefined();
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   test('rejects project-layer sensitive writes', () => {
     expect(() => setConfig({ key: 'providers.minimax.apiKey', value: 'secret', layer: 'project' })).toThrow('Sensitive config keys must be stored in the user config layer');
     expect(() => setConfig({ key: 'providers.minimax', value: { apiKey: 'secret' }, layer: 'project' })).toThrow('Sensitive config keys must be stored in the user config layer');
     expect(() => setConfig({ key: 'providers.minimax.baseUrl', value: 'https://api.minimaxi.com/anthropic', layer: 'project' })).toThrow('Sensitive config keys must be stored in the user config layer');
+    expect(() => setConfig({ key: 'proxy.httpProxy', value: 'http://127.0.0.1:58309', layer: 'project' })).toThrow('Sensitive config keys must be stored in the user config layer');
     expect(() => setConfig({ key: 'safe', value: { nested: { token: 'secret' } }, layer: 'project' })).toThrow('Sensitive config keys must be stored in the user config layer');
     expect(() => writeConfig({ providers: { minimax: { baseUrl: 'https://api.minimaxi.com/anthropic' } } }, 'project')).toThrow('Sensitive config keys must be stored in the user config layer');
+    expect(() => writeConfig({ proxy: { httpProxy: 'http://127.0.0.1:58309' } }, 'project')).toThrow('Sensitive config keys must be stored in the user config layer');
     expect(() => setConfig({ key: 'safe', value: 'value', layer: 'invalid' as 'project' })).toThrow('Invalid config layer');
   });
 
@@ -225,6 +269,36 @@ describe('secret config handling', () => {
 });
 
 describe('project config discovery', () => {
+  test('prefers project .peaks config over global .peaks config', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-config-root-'));
+    mkdirSync(join(projectRoot, '.peaks'), { recursive: true });
+    mkdirSync(join(configTestHome, '.peaks'), { recursive: true });
+    writeFileSync(join(configTestHome, '.peaks', 'config.json'), JSON.stringify({ language: 'en', currentWorkspace: 'global' }), 'utf8');
+    writeFileSync(join(projectRoot, '.peaks', 'config.json'), JSON.stringify({ language: 'zh', currentWorkspace: 'project' }), 'utf8');
+
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+    try {
+      expect(readConfig()).toMatchObject({ language: 'zh', currentWorkspace: 'project' });
+      expect(getConfig()).toMatchObject({ language: 'zh', currentWorkspace: 'project' });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  test('falls back to global .peaks config when project config is absent', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-config-root-'));
+    mkdirSync(join(configTestHome, '.peaks'), { recursive: true });
+    writeFileSync(join(configTestHome, '.peaks', 'config.json'), JSON.stringify({ language: 'zh', model: 'minimax' }), 'utf8');
+
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+    try {
+      expect(readConfig()).toMatchObject({ language: 'zh', model: 'minimax' });
+      expect(getConfig()).toMatchObject({ language: 'zh', model: 'minimax' });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
   test('does not read project config when marker resolves outside the candidate root', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-config-root-'));
     const outsideRoot = mkdtempSync(join(tmpdir(), 'peaks-config-outside-'));
@@ -278,7 +352,8 @@ describe('config types', () => {
           baseUrl: 'https://api.minimaxi.com/anthropic',
           apiKey: 'test-key'
         }
-      }
+      },
+      proxy: {}
     };
     expect(config.version).toBe('0.1.0');
     expect(config.currentWorkspace).toBe('ws1');
@@ -298,6 +373,7 @@ describe('CLI integration via program', () => {
     expect(DEFAULT_CONFIG.language).toBe('en');
     expect(DEFAULT_CONFIG.model).toBe('sonnet');
     expect(DEFAULT_CONFIG.providers).toEqual({});
+    expect(DEFAULT_CONFIG.proxy).toEqual({});
   });
 
   test('ConfigLayer type has user and project', async () => {

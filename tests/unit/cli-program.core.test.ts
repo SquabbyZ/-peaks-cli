@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import { parseJsonOutput, resetCliProgramMocks, runCommand, writeUserConfig } from './cli-program-test-utils.js';
 
 describe('createProgram', () => {
+
   beforeEach(() => {
     process.exitCode = undefined;
     resetCliProgramMocks();
@@ -120,6 +121,23 @@ describe('createProgram', () => {
 
     expect(output.ok).toBe(true);
     expect(output.command).toBe('tech.status');
+  });
+
+  test('prints simplified top-level planning commands', async () => {
+    const techPlanResult = await runCommand(['tech-plan', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--swarm', '--json']);
+    expect(parseJsonOutput(techPlanResult.stdout).command).toBe('tech.plan');
+
+    const techStatusResult = await runCommand(['tech-status', '--change-id', 'checkout-refactor', '--json']);
+    expect(parseJsonOutput(techStatusResult.stdout).command).toBe('tech.status');
+
+    const routeResult = await runCommand(['route', '--mode', 'solo', '--solo-mode', 'full-auto', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--json']);
+    expect(parseJsonOutput(routeResult.stdout).command).toBe('workflow.route');
+
+    const autonomousResult = await runCommand(['autonomous', '--mode', 'solo', '--change-id', 'autonomous-checkout', '--goal', 'Plan autonomous checkout refactor', '--json']);
+    expect(parseJsonOutput(autonomousResult.stdout).command).toBe('workflow.autonomous');
+
+    const swarmPlanResult = await runCommand(['swarm-plan', '--change-id', 'checkout-refactor', '--goal', 'Implement approved checkout refactor', '--json']);
+    expect(parseJsonOutput(swarmPlanResult.stdout).command).toBe('swarm.plan');
   });
 
   test('prints workflow route dry run for solo mode', async () => {
@@ -362,7 +380,44 @@ describe('createProgram', () => {
     expect(output.ok).toBe(true);
     expect(output.command).toBe('capability.status');
     expect(serializedData).toContain('everything-claude-code.code-review-agent');
-    expect(serializedData).toContain('"sources":[{"sourceId":"everything-claude-code"');
+    expect(serializedData).toContain('"sources":[{"sourceId":"ruflo-access-repo"');
+  });
+
+  test('prints capability map through top-level and compatibility commands', async () => {
+    const result = await runCommand(['capabilities', '--json']);
+    const output = parseJsonOutput<{ proxyPolicy?: { httpProxy: string }; sources: Array<{ sourceGroup: string }>; constraints: string[]; availability: Array<{ capabilityId: string; status: string }> }>(result.stdout);
+
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('capabilities.map');
+    expect(output.data.proxyPolicy).toBeUndefined();
+    expect(output.data.constraints.join('\n')).not.toContain('HTTP proxy');
+    expect(output.data.sources.some((source) => source.sourceGroup === 'access-repo')).toBe(true);
+    expect(output.data.sources.some((source) => source.sourceGroup === 'mcp-server')).toBe(true);
+    expect(output.data.availability.find((item) => item.capabilityId === 'context7.docs-lookup')?.status).toBe('unknown');
+
+    writeUserConfig({ proxy: { httpProxy: 'https://proxy.example:8443' } });
+    const configuredResult = await runCommand(['capabilities', '--json']);
+    const configuredOutput = parseJsonOutput<{ proxyPolicy?: { httpProxy: string } }>(configuredResult.stdout);
+    expect(configuredOutput.data.proxyPolicy?.httpProxy).toBe('https://proxy.example:8443');
+
+    const nestedResult = await runCommand(['capability', 'map', '--source', 'mcp-server', '--json']);
+    const nestedOutput = parseJsonOutput<{ proxyPolicy?: { httpProxy: string }; sources: Array<{ sourceGroup: string }> }>(nestedResult.stdout);
+    expect(nestedOutput.command).toBe('capabilities.map');
+    expect(nestedOutput.data.proxyPolicy?.httpProxy).toBe('https://proxy.example:8443');
+    expect(nestedOutput.data.sources.every((source) => source.sourceGroup === 'mcp-server')).toBe(true);
+
+    const plainResult = await runCommand(['capability', 'map', '--source', 'access-repo']);
+    expect(plainResult.stdout.join('\n')).not.toContain('http://127.0.0.1:58309');
+    expect(plainResult.stdout.join('\n')).toContain('https://proxy.example:8443');
+  });
+
+  test('rejects unsupported capability map source', async () => {
+    const result = await runCommand(['capabilities', '--source', 'unknown', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('UNSUPPORTED_CAPABILITY_SOURCE');
+    expect(result.exitCode).toBe(1);
   });
 
   test('prints config get as JSON envelope', async () => {
@@ -395,6 +450,63 @@ describe('createProgram', () => {
     const setupOutput = parseJsonOutput<{ step: string }>(setupResult.stdout);
     expect(setupOutput.ok).toBe(true);
     expect(setupOutput.data.step).toBe('configure');
+  });
+
+  test('plans project memory extraction and backup as JSON envelopes', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-memory-project-'));
+    const artifactWorkspace = mkdtempSync(join(tmpdir(), 'peaks-cli-memory-artifacts-'));
+    mkdirSync(join(projectRoot, '.peaks', 'changes'), { recursive: true });
+    const artifactPath = join(projectRoot, '.peaks', 'changes', 'rd.md');
+    writeFileSync(artifactPath, [
+      '<!-- peaks-memory:start -->',
+      'title: Skill lifecycle rule',
+      'kind: project',
+      '---',
+      'Skill must go personal -> team -> marketplace.',
+      '<!-- peaks-memory:end -->'
+    ].join('\n'), 'utf8');
+
+    const extractResult = await runCommand(['memory', 'extract', '--project', projectRoot, '--artifact', artifactPath, '--json']);
+    const extractOutput = parseJsonOutput<{ primaryMemoryDir: string; extractedCount: number; plannedWrites: Array<{ filePath: string; title: string }> }>(extractResult.stdout);
+    expect(extractOutput.ok).toBe(true);
+    expect(extractOutput.command).toBe('memory.extract');
+    expect(extractOutput.data.primaryMemoryDir).toBe(join(projectRoot, '.claude', 'memory'));
+    expect(extractOutput.data.extractedCount).toBe(1);
+    expect(extractOutput.data.plannedWrites[0]?.filePath).toBe(join(projectRoot, '.claude', 'memory', 'skill-lifecycle-rule.md'));
+    expect(extractResult.stdout.join('\n')).not.toContain('Skill must go personal -> team -> marketplace.');
+
+    const backupResult = await runCommand(['memory', 'sync', '--project', projectRoot, '--workspace', artifactWorkspace, '--json']);
+    const backupOutput = parseJsonOutput<{ backupMemoryDir: string }>(backupResult.stdout);
+    expect(backupOutput.ok).toBe(true);
+    expect(backupOutput.command).toBe('memory.sync');
+    expect(backupOutput.data.backupMemoryDir).toBe(join(artifactWorkspace, '.peaks', 'memory-backups', 'project-memory-primary'));
+  });
+
+  test('prints project memory command failures as JSON envelopes', async () => {
+    const { mkdirSync, mkdtempSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-memory-fail-project-'));
+    const missingArtifact = join(projectRoot, 'missing.md');
+
+    const extractResult = await runCommand(['memory', 'extract', '--project', projectRoot, '--artifact', missingArtifact, '--json']);
+    const extractOutput = parseJsonOutput(extractResult.stdout);
+    expect(extractOutput.ok).toBe(false);
+    expect(extractOutput.command).toBe('memory.extract');
+    expect(extractOutput.code).toBe('MEMORY_EXTRACT_FAILED');
+    expect(extractResult.exitCode).toBe(1);
+
+    const artifactWorkspace = join(projectRoot, '.peaks-artifacts');
+    mkdirSync(artifactWorkspace, { recursive: true });
+    const syncResult = await runCommand(['memory', 'sync', '--project', projectRoot, '--workspace', artifactWorkspace, '--json']);
+    const syncOutput = parseJsonOutput(syncResult.stdout);
+    expect(syncOutput.ok).toBe(false);
+    expect(syncOutput.command).toBe('memory.sync');
+    expect(syncOutput.code).toBe('MEMORY_SYNC_FAILED');
+    expect(syncResult.exitCode).toBe(1);
   });
 
   test('rejects invalid tech workflow and swarm inputs', async () => {

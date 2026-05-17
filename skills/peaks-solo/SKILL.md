@@ -16,6 +16,7 @@ Peaks Solo may:
 - identify scenarios such as refactor, bugfix, QA hardening, release validation, and incident response;
 - recommend Solo, Assisted, Swarm, or Strict profiles;
 - coordinate Peaks role skills through artifacts;
+- coordinate project memory extraction from stable skill artifact sections;
 - request user confirmation at risk and commit boundaries;
 - read CLI doctor/profile/artifact reports.
 

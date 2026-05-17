@@ -24,6 +24,10 @@ export type ModelProviderConfig = {
   minimax?: MiniMaxProviderConfig;
 };
 
+export type ProxyConfig = {
+  httpProxy?: string;
+};
+
 export type WorkspaceConfig = {
   workspaceId: string;
   name: string;
@@ -44,6 +48,7 @@ export type PeaksConfig = {
   model: ModelPreference;
   tokens: TokenConfig;
   providers: ModelProviderConfig;
+  proxy: ProxyConfig;
 };
 
 export type ConfigLayer = 'user' | 'project';
@@ -66,5 +71,6 @@ export const DEFAULT_CONFIG: PeaksConfig = {
   language: 'en',
   model: 'sonnet',
   tokens: {},
-  providers: {}
+  providers: {},
+  proxy: {}
 };

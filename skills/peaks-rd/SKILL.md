@@ -30,6 +30,16 @@ If a request is refactor, cleanup, architecture adjustment, module split, or tec
 8. require 100% acceptance for the slice;
 9. require code and intermediate artifacts to be committed before continuing.
 
+## External capability guidance
+
+Use `peaks capabilities --source access-repo --json` and `peaks capabilities --source mcp-server --json` as the source of truth before recommending external resources.
+
+- Context7 can support current library/API documentation lookup when the map says it is available or the user authorizes MCP access.
+- SearchCode can support external code discovery only after confirming the query will not expose secrets or private code.
+- everything-claude-code, Claude Code Best Practice, mattpocock/skills, and andrej-karpathy-skills are RD guidance or review references; apply project-local conventions first.
+- OpenSpec can shape spec-first RD artifacts, but Peaks PRD/RD/QA gates remain authoritative.
+- GitNexus remains a future proxied repository-intelligence boundary; do not install or run it directly.
+
 ## Boundaries
 
 Do not bypass PRD/QA artifacts. Do not install hooks, agents, MCP, or settings. Ask the Peaks CLI to handle runtime side effects.

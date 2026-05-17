@@ -2,6 +2,9 @@ export type CapabilitySourceType = 'repo' | 'skills-package' | 'mcp-collection' 
 export type CapabilityItemType = 'skill' | 'agent' | 'mcp' | 'rule' | 'hook' | 'template' | 'workflow' | 'doc' | 'cli';
 export type CapabilityAvailabilityStatus = 'available' | 'installable' | 'disabled' | 'unknown';
 export type RiskLevel = 'low' | 'medium' | 'high';
+export type CapabilitySourceGroup = 'access-repo' | 'mcp-server';
+export type CapabilityLandingKind = 'cli' | 'skill' | 'catalog' | 'fallback';
+export type CapabilityMapSourceFilter = CapabilitySourceGroup | 'all';
 
 export type LocalizedText = Record<string, string>;
 
@@ -14,6 +17,7 @@ export type CapabilityFallback = {
 export type CapabilitySource = {
   sourceId: string;
   sourceType: CapabilitySourceType;
+  sourceGroup?: CapabilitySourceGroup;
   title: string;
   url: string;
   trustSignals?: {
@@ -57,6 +61,38 @@ export type CapabilityAvailability = {
   };
   fallback: CapabilityFallback;
   risk: RiskLevel;
+};
+
+export type CapabilityLandingMapping = {
+  capabilityId: string;
+  sourceId: string;
+  sourceGroup: CapabilitySourceGroup;
+  landingKind: CapabilityLandingKind;
+  target: string;
+  commandPreview?: string;
+  skillName?: string;
+  guidance: string;
+  dryRunOnly: boolean;
+};
+
+export type CapabilityMapPlan = {
+  dryRunOnly: true;
+  executionPolicy: {
+    allowInstall: false;
+    allowClone: false;
+    allowConfigWrite: false;
+    allowSecretExfiltration: false;
+  };
+  proxyPolicy?: {
+    requiredForExternalAccess: true;
+    httpProxy: string;
+  };
+  sources: CapabilitySource[];
+  items: CapabilityItem[];
+  mappings: CapabilityLandingMapping[];
+  availability: CapabilityAvailability[];
+  constraints: string[];
+  warnings: string[];
 };
 
 export type RecommendationOption = {

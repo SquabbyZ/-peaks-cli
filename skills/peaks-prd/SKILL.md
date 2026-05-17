@@ -26,6 +26,15 @@ For refactor workflows, avoid writing a full product PRD unless needed. Produce 
 - risk notes;
 - user confirmation record.
 
+## External capability guidance
+
+Use `peaks capabilities --source mcp-server --json` before recommending product or workflow methodology resources.
+
+- OpenSpec can structure spec-first product and engineering artifacts.
+- Superpowers can inform workflow methodology and artifact sequencing.
+- gstack can inform product-stack tradeoffs, but user goals and non-goals remain authoritative.
+- External methods are inspiration and governance inputs, not automatic executors.
+
 ## Boundaries
 
 Do not implement code, run tests, install hooks, or modify runtime configuration. Use Peaks CLI reports and downstream artifacts instead.

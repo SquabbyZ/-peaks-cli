@@ -21,6 +21,15 @@ describe('seed capability catalog', () => {
     expect(context7?.itemType).toBe('mcp');
     expect(context7?.workflows).toContain('code-refactor');
   });
+
+  test('includes representative access and mcp server capability seeds', () => {
+    expect(seedCapabilitySources.map((source) => source.sourceId)).toEqual(
+      expect.arrayContaining(['playwright-mcp', 'chrome-devtools-mcp', 'figma-context-mcp', 'openspec', 'shadcn-ui', 'minimax-skills'])
+    );
+    expect(seedCapabilityItems.map((item) => item.capabilityId)).toEqual(
+      expect.arrayContaining(['playwright-mcp.browser-validation', 'chrome-devtools-mcp.browser-debug', 'figma-context-mcp.design-context', 'openspec.spec-workflow', 'shadcn-ui.component-system', 'minimax-skills.worker-guidance'])
+    );
+  });
 });
 
 describe('createRecommendationPlan', () => {

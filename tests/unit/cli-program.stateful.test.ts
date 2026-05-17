@@ -263,6 +263,17 @@ describe('createProgram', () => {
     expect(getMinimaxWorkerRun()).not.toHaveBeenCalled();
   });
 
+  test('minimax-worker top-level command requires explicit confirmation', async () => {
+    const result = await runCommand(['minimax-worker', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout flow', '--coding-task', 'Update checkout state handling', '--unit-test-task', 'Add focused unit tests', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.command).toBe('worker.minimax');
+    expect(output.code).toBe('CONFIRMATION_REQUIRED');
+    expect(result.exitCode).toBe(1);
+    expect(getMinimaxWorkerRun()).not.toHaveBeenCalled();
+  });
+
   test('worker minimax redacts review handoff when provider is unconfigured', async () => {
     const sensitivePrompt = 'SECRET REVIEW PROMPT SHOULD NOT LEAK';
     const sensitiveSummary = 'SECRET WORKER SUMMARY SHOULD NOT LEAK';

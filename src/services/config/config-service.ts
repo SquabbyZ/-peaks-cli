@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
-import { repoRoot } from '../../shared/paths.js';
 import { homedir } from 'node:os';
-import type { ConfigGetOptions, ConfigLayer, ConfigSetOptions, MiniMaxProviderConfig, ModelPreference, ModelProviderConfig, PeaksConfig, TokenConfig, TokenRef, WorkspaceConfig } from './config-types.js';
+import type { ConfigGetOptions, ConfigLayer, ConfigSetOptions, MiniMaxProviderConfig, ModelPreference, ModelProviderConfig, PeaksConfig, ProxyConfig, TokenConfig, TokenRef, WorkspaceConfig } from './config-types.js';
 import { DEFAULT_CONFIG } from './config-types.js';
 
 function getUserConfigPath(): string {
@@ -41,8 +40,7 @@ function findProjectRoot(startPath: string): string | null {
     current = dirname(parent);
   }
 
-  const fallbackRoot = resolve(repoRoot);
-  return existsSync(resolve(fallbackRoot, '.peaks', 'config.json')) && isSafeProjectConfigMarker(fallbackRoot) ? fallbackRoot : null;
+  return null;
 }
 
 function getProjectConfigPath(projectRoot: string | null): string | null {
@@ -175,8 +173,41 @@ function validateMiniMaxBaseUrl(value: unknown): void {
   }
 }
 
+function getProxyUrlCandidate(key: string, value: unknown): unknown {
+  if (key === 'proxy.httpProxy') {
+    return value;
+  }
+  if (key === 'proxy' && isRecord(value)) {
+    return value.httpProxy;
+  }
+  return undefined;
+}
+
+function isProxyConfigPath(path: string): boolean {
+  return path === 'proxy' || path.startsWith('proxy.');
+}
+
 function validateProviderConfig(partial: Partial<PeaksConfig>): void {
   validateMiniMaxBaseUrl(partial.providers?.minimax?.baseUrl);
+}
+
+function isValidProxyUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.username.length === 0 && url.password.length === 0 && url.pathname === '/' && url.search.length === 0 && url.hash.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+function validateProxyUrl(value: unknown): void {
+  if (value !== undefined && (typeof value !== 'string' || !isValidProxyUrl(value))) {
+    throw new Error('Proxy URL must be an HTTP or HTTPS URL without embedded credentials');
+  }
+}
+
+function validateProxyConfig(partial: Partial<PeaksConfig>): void {
+  validateProxyUrl(partial.proxy?.httpProxy);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -242,6 +273,11 @@ function toTokenConfig(value: unknown): TokenConfig {
 function toModelProviderConfig(value: unknown): ModelProviderConfig {
   if (!isRecord(value)) return {};
   return { minimax: toMiniMaxProviderConfig(value.minimax) };
+}
+
+function toProxyConfig(value: unknown): ProxyConfig | null {
+  if (!isRecord(value)) return null;
+  return typeof value.httpProxy === 'string' && isValidProxyUrl(value.httpProxy) ? { httpProxy: value.httpProxy } : null;
 }
 
 function getProjectWritePath(): string {
@@ -338,6 +374,7 @@ export function setMiniMaxProviderConfig(input: MiniMaxProviderConfig): MiniMaxP
 
 function toPeaksConfig(value: unknown): Partial<PeaksConfig> {
   if (!isRecord(value)) return {};
+  const proxy = toProxyConfig(value.proxy);
   return {
     ...(typeof value.version === 'string' ? { version: value.version } : {}),
     ...(typeof value.currentWorkspace === 'string' ? { currentWorkspace: value.currentWorkspace } : {}),
@@ -345,7 +382,8 @@ function toPeaksConfig(value: unknown): Partial<PeaksConfig> {
     ...(typeof value.language === 'string' ? { language: value.language } : {}),
     ...(typeof value.model === 'string' && ['haiku', 'sonnet', 'opus', 'minimax'].includes(value.model) ? { model: value.model as ModelPreference } : {}),
     ...(isRecord(value.tokens) ? { tokens: toTokenConfig(value.tokens) } : {}),
-    ...(isRecord(value.providers) ? { providers: toModelProviderConfig(value.providers) } : {})
+    ...(isRecord(value.providers) ? { providers: toModelProviderConfig(value.providers) } : {}),
+    ...(proxy ? { proxy } : {})
   };
 }
 
@@ -356,11 +394,12 @@ export function readConfig(projectRoot?: string | null): PeaksConfig {
 
   const userConfig = toPeaksConfig(readJsonFile(userPath));
   const projectConfig = removeProjectProviderSecrets(toPeaksConfig(readJsonFile(projectPath)));
+  const { proxy: projectProxy, ...projectConfigWithoutProxy } = projectConfig;
 
   return {
     ...DEFAULT_CONFIG,
     ...userConfig,
-    ...projectConfig
+    ...projectConfigWithoutProxy
   } as PeaksConfig;
 }
 
@@ -368,10 +407,11 @@ export function writeConfig(partial: Partial<PeaksConfig>, layer: ConfigLayer = 
   if (!isConfigLayer(layer)) {
     throw new Error('Invalid config layer');
   }
-  if (layer === 'project' && (partial.providers !== undefined || containsSensitiveConfigValue(partial))) {
+  if (layer === 'project' && (partial.providers !== undefined || partial.proxy !== undefined || containsSensitiveConfigValue(partial))) {
     throw new Error('Sensitive config keys must be stored in the user config layer');
   }
   validateProviderConfig(partial);
+  validateProxyConfig(partial);
 
   if (layer === 'project') {
     const projectPath = getProjectWritePath();
@@ -395,7 +435,8 @@ export function getConfig(options: ConfigGetOptions = {}): unknown {
   const projectRoot = findProjectRoot(process.cwd());
   const userConfig = readJsonFile(getUserConfigPath()) ?? {};
   const projectConfig = removeProjectProviderSecrets(readJsonFile(getProjectConfigPath(projectRoot)) ?? {});
-  const source = options.layer === 'user' ? userConfig : options.layer === 'project' ? projectConfig : { ...userConfig, ...projectConfig };
+  const { proxy: projectProxy, ...projectConfigWithoutProxy } = projectConfig;
+  const source = options.layer === 'user' ? userConfig : options.layer === 'project' ? projectConfig : { ...userConfig, ...projectConfigWithoutProxy };
   const config = isRecord(source) ? { ...source, ...(source.tokens !== undefined ? { tokens: toTokenConfig(source.tokens) } : {}) } : source;
 
   if (options.key !== undefined) {
@@ -410,10 +451,11 @@ export function setConfig(options: ConfigSetOptions): void {
   if (!isConfigLayer(layer)) {
     throw new Error('Invalid config layer');
   }
-  if (layer === 'project' && (isProviderConfigPath(options.key) || isSensitiveConfigPath(options.key) || containsSensitiveConfigValue(options.value))) {
+  if (layer === 'project' && (isProviderConfigPath(options.key) || isProxyConfigPath(options.key) || isSensitiveConfigPath(options.key) || containsSensitiveConfigValue(options.value))) {
     throw new Error('Sensitive config keys must be stored in the user config layer');
   }
   validateMiniMaxBaseUrl(getMiniMaxBaseUrlCandidate(options.key, options.value));
+  validateProxyUrl(getProxyUrlCandidate(options.key, options.value));
 
   const targetPath = layer === 'project' ? getProjectWritePath() : getUserConfigPath();
 

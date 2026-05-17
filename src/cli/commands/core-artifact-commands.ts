@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { createArtifactInitPlan, getArtifactStatus, createGuidedArtifactSetup } from '../../services/artifacts/artifact-service.js';
 import { getArtifactWorkspaceStatus, planArtifactSync } from '../../services/artifacts/workspace-service.js';
+import { executeProjectMemoryBackup, executeProjectMemoryExtract, summarizeProjectMemoryBackupResult, summarizeProjectMemoryExtractResult } from '../../services/memory/project-memory-service.js';
 import { listProfiles } from '../../services/profiles/profile-service.js';
 import { planProxyTest } from '../../services/proxy/proxy-service.js';
 import { runDoctor } from '../../services/doctor/doctor-service.js';
@@ -38,6 +39,42 @@ export function registerCoreAndArtifactCommands(program: Command, io: ProgramIO)
   const profile = program.command('profile').description('Manage runtime profiles');
   addJsonOption(profile.command('list').description('List available profiles')).action((options: { json?: boolean }) => {
     printResult(io, ok('profile.list', { profiles: listProfiles() }), options.json);
+  });
+
+  const memory = program.command('memory').description('Manage project-local Peaks memory');
+  addJsonOption(
+    memory
+      .command('extract')
+      .description('Extract stable project memory from skill artifacts into project .claude/memory')
+      .requiredOption('--project <path>', 'target project root')
+      .requiredOption('--artifact <path...>', 'skill artifact paths inside the project')
+      .option('--dry-run', 'preview writes without changing files', true)
+      .option('--apply', 'write extracted memories into project .claude/memory')
+  ).action((options: { project: string; artifact: string[]; dryRun?: boolean; apply?: boolean; json?: boolean }) => {
+    try {
+      const result = executeProjectMemoryExtract({ projectRoot: options.project, artifactPaths: options.artifact, apply: options.apply === true });
+      printResult(io, ok('memory.extract', summarizeProjectMemoryExtractResult(result)), options.json);
+    } catch (error) {
+      printResult(io, fail('memory.extract', 'MEMORY_EXTRACT_FAILED', getErrorMessage(error), {}, ['Check artifact paths and remove secrets before extracting memory']), options.json);
+      process.exitCode = 1;
+    }
+  });
+  addJsonOption(
+    memory
+      .command('sync')
+      .description('Back up project .claude/memory into the artifact workspace')
+      .requiredOption('--project <path>', 'target project root')
+      .requiredOption('--workspace <path>', 'artifact workspace path')
+      .option('--dry-run', 'preview copies without changing files', true)
+      .option('--apply', 'copy project .claude/memory into artifact workspace backup')
+  ).action((options: { project: string; workspace: string; dryRun?: boolean; apply?: boolean; json?: boolean }) => {
+    try {
+      const result = executeProjectMemoryBackup({ projectRoot: options.project, artifactWorkspacePath: options.workspace, apply: options.apply === true });
+      printResult(io, ok('memory.sync', summarizeProjectMemoryBackupResult(result)), options.json);
+    } catch (error) {
+      printResult(io, fail('memory.sync', 'MEMORY_SYNC_FAILED', getErrorMessage(error), {}, ['Use an artifact workspace outside the project root']), options.json);
+      process.exitCode = 1;
+    }
   });
 
   const proxy = program.command('proxy').description('Manage proxy settings');
