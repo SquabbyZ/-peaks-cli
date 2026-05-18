@@ -33,7 +33,12 @@ Use the Peaks CLI for runtime side effects.
 
 ## Project standards preflight
 
-Before orchestrating an end-to-end code repository workflow, automatically gather the project standards preflight status from RD and QA. If project-local standards are missing, present the standards init dry-run plan before implementation starts. Apply the standards only when write authorization exists; otherwise keep it as a next action and continue only when the selected workflow can safely proceed without writing standards.
+Before orchestrating an end-to-end code repository workflow, gather the project standards preflight status from RD and QA by calling the Peaks CLI:
+
+- `peaks standards init --project <path> --dry-run`
+- `peaks standards update --project <path> --dry-run`
+
+Use `standards init` for first-time creation and `standards update` for existing `CLAUDE.md` append/review behavior. Apply only when write authorization exists; otherwise keep the CLI output as the next action and continue only when the selected workflow can safely proceed without writing standards. Do not hand-write standards file mutations inside the skill.
 
 ## Refactor mode
 

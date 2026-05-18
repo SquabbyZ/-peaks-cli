@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { createArtifactInitPlan, getArtifactStatus, createGuidedArtifactSetup } from '../../services/artifacts/artifact-service.js';
 import { getArtifactWorkspaceStatus, planArtifactSync } from '../../services/artifacts/workspace-service.js';
 import { executeProjectMemoryBackup, executeProjectMemoryExtract, summarizeProjectMemoryBackupResult, summarizeProjectMemoryExtractResult } from '../../services/memory/project-memory-service.js';
-import { executeProjectStandardsInit, summarizeProjectStandardsInitResult } from '../../services/standards/project-standards-service.js';
+import { executeProjectStandardsInit, executeProjectStandardsUpdate, summarizeProjectStandardsInitResult, summarizeProjectStandardsUpdateResult } from '../../services/standards/project-standards-service.js';
 import { listProfiles } from '../../services/profiles/profile-service.js';
 import { planProxyTest } from '../../services/proxy/proxy-service.js';
 import { runDoctor } from '../../services/doctor/doctor-service.js';
@@ -63,6 +63,36 @@ export function registerCoreAndArtifactCommands(program: Command, io: ProgramIO)
       printResult(io, ok('standards.init', summarizeProjectStandardsInitResult(result)), options.json);
     } catch (error) {
       printResult(io, fail('standards.init', 'STANDARDS_INIT_FAILED', getErrorMessage(error), {}, ['Check the project path and existing .claude/rules directory before retrying']), options.json);
+      process.exitCode = 1;
+    }
+  });
+  addJsonOption(
+    standards
+      .command('update')
+      .description('Append managed standards metadata to an existing CLAUDE.md without rewriting the body')
+      .requiredOption('--project <path>', 'target project root')
+      .option('--language <language>', 'standards language pack')
+      .option('--dry-run', 'preview writes without changing files')
+      .option('--apply', 'append managed metadata to the target project')
+  ).action((options: { project: string; language?: string; dryRun?: boolean; apply?: boolean; json?: boolean }) => {
+    if (options.dryRun === true && options.apply === true) {
+      printResult(io, fail('standards.update', 'INVALID_STANDARDS_UPDATE_FLAGS', 'Use either --dry-run or --apply, not both', {}, ['Run without --apply to preview writes, or omit --dry-run when applying standards updates']), options.json);
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      const result = executeProjectStandardsUpdate({ projectRoot: options.project, ...(options.language !== undefined ? { language: options.language } : {}), apply: options.apply === true });
+      const summary = summarizeProjectStandardsUpdateResult(result);
+      const response = summary.reviewSuggestions.length > 0
+        ? fail('standards.update', 'STANDARDS_UPDATE_REVIEW_REQUIRED', 'Standards update requires manual review', summary, summary.reviewSuggestions)
+        : ok('standards.update', summary);
+      printResult(io, response, options.json);
+      if (summary.reviewSuggestions.length > 0) {
+        process.exitCode = 1;
+      }
+    } catch (error) {
+      printResult(io, fail('standards.update', 'STANDARDS_UPDATE_FAILED', getErrorMessage(error), {}, ['Check the project path, CLAUDE.md contents, and existing .claude/rules directory before retrying']), options.json);
       process.exitCode = 1;
     }
   });

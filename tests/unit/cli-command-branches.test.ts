@@ -13,8 +13,18 @@ const branchState = vi.hoisted(() => ({
   setMiniMaxProviderConfig: vi.fn()
 }));
 
+const standardsState = vi.hoisted(() => ({
+  executeProjectStandardsUpdate: vi.fn(),
+  summarizeProjectStandardsUpdateResult: vi.fn()
+}));
+
 vi.mock('../../src/services/doctor/doctor-service.js', () => ({
   runDoctor: branchState.runDoctor
+}));
+
+vi.mock('../../src/services/standards/project-standards-service.js', () => ({
+  executeProjectStandardsUpdate: standardsState.executeProjectStandardsUpdate,
+  summarizeProjectStandardsUpdateResult: standardsState.summarizeProjectStandardsUpdateResult
 }));
 
 vi.mock('../../src/services/config/config-service.js', async (importOriginal) => {
@@ -59,6 +69,8 @@ describe('cli command branch handling', () => {
     branchState.runDoctor.mockReset();
     branchState.setConfig.mockReset();
     branchState.setMiniMaxProviderConfig.mockReset();
+    standardsState.executeProjectStandardsUpdate.mockReset();
+    standardsState.summarizeProjectStandardsUpdateResult.mockReset();
   });
 
   test('reports failed doctor and skill doctor checks', async () => {
@@ -134,6 +146,31 @@ describe('cli command branch handling', () => {
     const output = parseJsonOutput(harness.stdout);
     expect(output.ok).toBe(true);
     expect(output.command).toBe('workflow.route');
+  });
+
+  test('returns a non-zero exit code when standards update needs review', async () => {
+    standardsState.executeProjectStandardsUpdate.mockReturnValueOnce({
+      apply: true,
+      projectRoot: '/tmp/project',
+      language: 'typescript',
+      source: { sourceId: 'everything-claude-code', url: 'https://github.com/affaan-m/everything-claude-code', usage: 'curated-baseline-reference' },
+      skillPreflight: { appliesTo: ['peaks-rd', 'peaks-qa', 'peaks-solo'], summary: 'summary' },
+      plannedWrites: [],
+      writtenFiles: [],
+      appendedFiles: [],
+      reviewSuggestions: ['manual review needed'],
+      claudeMd: { relativePath: 'CLAUDE.md', status: 'review', reviewSuggestions: ['manual review needed'] }
+    });
+    standardsState.summarizeProjectStandardsUpdateResult.mockImplementationOnce((result) => result);
+    const { registerCoreAndArtifactCommands } = await import('../../src/cli/commands/core-artifact-commands.js');
+
+    const result = await runRegisteredCommand(registerCoreAndArtifactCommands, ['standards', 'update', '--project', '/tmp/project', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('STANDARDS_UPDATE_REVIEW_REQUIRED');
+    expect(output.data).toBeDefined();
+    expect(result.exitCode).toBe(1);
   });
 
   test('covers workflow route with a workspace context', async () => {

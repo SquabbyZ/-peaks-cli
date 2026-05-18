@@ -18,7 +18,12 @@ Peaks RD owns engineering analysis, implementation planning, and refactor execut
 
 ## Project standards preflight
 
-Before RD planning or implementation work in a code repository, automatically check whether the target project has `CLAUDE.md` and `.claude/rules` project standards. If they are missing, generate a standards init dry-run plan through the Peaks runtime and surface it as a preflight next action. Apply it only when write authorization exists; otherwise ask for confirmation. Use `everything-claude-code` only as a curated standards source, never as unreviewed executable content.
+Before RD planning or implementation work in a code repository, call the Peaks CLI:
+
+- `peaks standards init --project <path> --dry-run`
+- `peaks standards update --project <path> --dry-run`
+
+If `CLAUDE.md` is missing, treat creation as the preferred path. If `CLAUDE.md` already exists, use `standards update` to decide whether to append a managed index block or surface review-only suggestions. Apply only when write authorization exists; otherwise keep the CLI output as a preflight next action. Do not hand-write standards file mutations inside the skill.
 
 ## Refactor hard gates
 

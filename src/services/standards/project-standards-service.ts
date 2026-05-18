@@ -1,8 +1,8 @@
-import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, realpathSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type StandardsLanguage = 'generic' | 'typescript' | 'javascript' | 'python' | 'go' | 'rust';
-export type StandardsWriteStatus = 'planned' | 'exists' | 'written';
+export type StandardsWriteStatus = 'planned' | 'existing' | 'written' | 'appended' | 'review';
 
 export type StandardsWrite = {
   readonly relativePath: string;
@@ -44,6 +44,41 @@ export type ProjectStandardsInitSummary = {
   readonly plannedWrites: Array<Pick<StandardsWrite, 'relativePath' | 'status'>>;
   readonly writtenFiles: string[];
   readonly skippedFiles: string[];
+};
+
+export type ProjectStandardsUpdatePlan = ProjectStandardsInitPlan & {
+  readonly claudeMd: {
+    readonly relativePath: 'CLAUDE.md';
+    readonly filePath: string;
+    readonly status: StandardsWriteStatus;
+    readonly content: string;
+    readonly appendBlock: string;
+    readonly reviewSuggestions: string[];
+  };
+};
+
+export type ProjectStandardsUpdateResult = ProjectStandardsUpdatePlan & {
+  readonly writtenFiles: string[];
+  readonly appendedFiles: string[];
+  readonly reviewSuggestions: string[];
+};
+
+export type ProjectStandardsUpdateSummary = {
+  readonly apply: boolean;
+  readonly projectRoot: string;
+  readonly language: StandardsLanguage;
+  readonly source: ProjectStandardsSource;
+  readonly skillPreflight: StandardsSkillPreflight;
+  readonly plannedWrites: Array<Pick<StandardsWrite, 'relativePath' | 'status'>>;
+  readonly writtenFiles: string[];
+  readonly appendedFiles: string[];
+  readonly skippedFiles: string[];
+  readonly reviewSuggestions: string[];
+  readonly claudeMd: {
+    readonly relativePath: 'CLAUDE.md';
+    readonly status: StandardsWriteStatus;
+    readonly reviewSuggestions: string[];
+  };
 };
 
 type ProjectStandardsInitOptions = {
@@ -88,6 +123,13 @@ function assertDirectoryNotSymlink(path: string): void {
 function assertRealPathInsideProject(path: string, projectRoot: string): void {
   if (!isInsidePath(realpathSync(path), projectRoot)) {
     throw new Error('Project standards write target must stay inside the project root');
+  }
+}
+
+function assertSafeClaudeMdPath(filePath: string, projectRoot: string): void {
+  if (!existsSync(filePath)) return;
+  if (lstatSync(filePath).isSymbolicLink() || !isInsidePath(realpathSync(filePath), projectRoot)) {
+    throw new Error('Project standards CLAUDE.md must stay inside the project root');
   }
 }
 
@@ -137,6 +179,8 @@ function renderClaudeMd(language: StandardsLanguage): string {
   return [
     '# Project Instructions',
     '',
+    '> 🤖 AI 生成，请审阅',
+    '',
     'This repository uses project-local Peaks standards. Existing repository conventions override generic generated guidance.',
     '',
     'Peaks workflow automation:',
@@ -148,7 +192,7 @@ function renderClaudeMd(language: StandardsLanguage): string {
     '- Read `.claude/rules/common/coding-style.md` before editing code.',
     '- Read `.claude/rules/common/code-review.md` before reviewing changes.',
     '- Read `.claude/rules/common/security.md` before touching filesystem, user input, external calls, auth, or secrets.',
-    `- Read \`.claude/rules/${language}/coding-style.md\` for language-specific standards when applicable.`,
+    `- Read .claude/rules/${language}/coding-style.md for language-specific standards when applicable.`,
     '',
     'External reference: https://github.com/affaan-m/everything-claude-code is used as a curated reference only. Do not execute or install external content without explicit approval.',
     ''
@@ -192,6 +236,50 @@ ${typeSafetyRule}- Prefer standard tooling and existing project scripts for form
 `;
 }
 
+function renderManagedClaudeMdIndex(language: StandardsLanguage): string {
+  return [
+    '<!-- peaks-standards:index:start -->',
+    '## Peaks Standards Index',
+    '- Constitution: `CLAUDE.md` is the repository-wide constitution.',
+    '- Local laws: `.claude/rules/**` are project-local laws and are created only when missing.',
+    '- Managed by: `peaks standards update`.',
+    '- Managed files:',
+    '  - `.claude/rules/common/code-review.md`',
+    '  - `.claude/rules/common/coding-style.md`',
+    '  - `.claude/rules/common/security.md`',
+    `  - .claude/rules/${language}/coding-style.md`,
+    '- Conflict note: keep the existing body unchanged and resolve any disagreement manually before the next standards update.',
+    '<!-- peaks-standards:index:end -->',
+    ''
+  ].join('\n');
+}
+
+function readFileIfExists(path: string): string | null {
+  if (!existsSync(path)) return null;
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeMissingStandardsRules(plan: ProjectStandardsInitPlan): string[] {
+  const writtenFiles: string[] = [];
+
+  for (const write of plan.plannedWrites) {
+    if (write.relativePath === 'CLAUDE.md' || write.status === 'existing') continue;
+    const targetPath = resolve(write.filePath);
+    const targetDir = dirname(targetPath);
+    mkdirSync(targetDir, { recursive: true });
+    assertRealPathInsideProject(targetDir, plan.projectRoot);
+    writeNewFile(targetPath, write.content);
+    writtenFiles.push(write.relativePath);
+  }
+
+  return writtenFiles;
+}
+
 function createTemplates(language: StandardsLanguage): StandardsTemplate[] {
   return [
     { relativePath: 'CLAUDE.md', content: renderClaudeMd(language) },
@@ -202,17 +290,92 @@ function createTemplates(language: StandardsLanguage): StandardsTemplate[] {
   ];
 }
 
+function createManagedClaudeBlock(language: StandardsLanguage): string {
+  return renderManagedClaudeMdIndex(language);
+}
+
+function buildClaudeUpdate(projectRoot: string, language: StandardsLanguage): {
+  readonly relativePath: 'CLAUDE.md';
+  readonly filePath: string;
+  readonly status: StandardsWriteStatus;
+  readonly content: string;
+  readonly appendBlock: string;
+  readonly reviewSuggestions: string[];
+} {
+  const filePath = resolve(projectRoot, 'CLAUDE.md');
+  assertSafeClaudeMdPath(filePath, projectRoot);
+  const existingContent = readFileIfExists(filePath);
+  const managedBlock = createManagedClaudeBlock(language);
+
+  if (existingContent === null) {
+    return {
+      relativePath: 'CLAUDE.md',
+      filePath,
+      status: 'planned',
+      content: `${renderClaudeMd(language).trimEnd()}\n\n${managedBlock}`,
+      appendBlock: '',
+      reviewSuggestions: []
+    };
+  }
+
+  const existingBlockStart = existingContent.indexOf('<!-- peaks-standards:index:start -->');
+  if (existingBlockStart < 0) {
+    return {
+      relativePath: 'CLAUDE.md',
+      filePath,
+      status: 'appended',
+      content: `${existingContent.trimEnd()}
+
+${managedBlock}`,
+      appendBlock: `
+
+${managedBlock}`,
+      reviewSuggestions: []
+    };
+  }
+
+  const existingManagedBlock = existingContent.slice(existingBlockStart).trimEnd();
+  if (existingManagedBlock === managedBlock.trimEnd()) {
+    return {
+      relativePath: 'CLAUDE.md',
+      filePath,
+      status: 'existing',
+      content: existingContent,
+      appendBlock: '',
+      reviewSuggestions: []
+    };
+  }
+
+  return {
+    relativePath: 'CLAUDE.md',
+    filePath,
+    status: 'review',
+    content: existingContent,
+    appendBlock: '',
+    reviewSuggestions: ['Existing CLAUDE.md already has a managed standards block. Review the managed block manually before changing it.']
+  };
+}
+
 function buildWrite(projectRoot: string, template: StandardsTemplate): StandardsWrite {
   const filePath = resolve(projectRoot, template.relativePath);
   return {
     ...template,
     filePath,
-    status: existsSync(filePath) ? 'exists' : 'planned'
+    status: existsSync(filePath) ? 'existing' : 'planned'
   };
 }
 
 function writeNewFile(path: string, content: string): void {
-  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    writeFileSync(fd, content, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function appendExistingFile(path: string, content: string): void {
+  const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
   try {
     writeFileSync(fd, content, 'utf8');
   } finally {
@@ -236,6 +399,15 @@ export function createProjectStandardsInitPlan(options: ProjectStandardsInitOpti
   };
 }
 
+export function createProjectStandardsUpdatePlan(options: ProjectStandardsInitOptions): ProjectStandardsUpdatePlan {
+  const basePlan = createProjectStandardsInitPlan(options);
+  const claudeMd = buildClaudeUpdate(basePlan.projectRoot, basePlan.language);
+  return {
+    ...basePlan,
+    claudeMd
+  };
+}
+
 export function executeProjectStandardsInit(options: ProjectStandardsInitOptions): ProjectStandardsInitResult {
   const plan = createProjectStandardsInitPlan(options);
   const writtenFiles: string[] = [];
@@ -243,11 +415,14 @@ export function executeProjectStandardsInit(options: ProjectStandardsInitOptions
   if (plan.apply) {
     assertSafeStandardsRoot(plan.projectRoot);
     for (const write of plan.plannedWrites) {
-      if (write.status === 'exists') continue;
+      if (write.status === 'existing') continue;
       const targetPath = resolve(write.filePath);
       const targetDir = dirname(targetPath);
       mkdirSync(targetDir, { recursive: true });
       assertRealPathInsideProject(targetDir, plan.projectRoot);
+      if (write.relativePath === 'CLAUDE.md') {
+        assertSafeClaudeMdPath(targetPath, plan.projectRoot);
+      }
       writeNewFile(targetPath, write.content);
       writtenFiles.push(write.relativePath);
     }
@@ -260,6 +435,52 @@ export function executeProjectStandardsInit(options: ProjectStandardsInitOptions
   };
 }
 
+export function executeProjectStandardsUpdate(options: ProjectStandardsInitOptions): ProjectStandardsUpdateResult {
+  const plan = createProjectStandardsUpdatePlan(options);
+  const writtenFiles: string[] = [];
+  const appendedFiles: string[] = [];
+  const reviewSuggestions = [...plan.claudeMd.reviewSuggestions];
+  let claudeMd = { ...plan.claudeMd };
+
+  if (plan.apply) {
+    assertSafeStandardsRoot(plan.projectRoot);
+    writtenFiles.push(...writeMissingStandardsRules(plan));
+    const targetPath = resolve(claudeMd.filePath);
+    const targetDir = dirname(targetPath);
+    mkdirSync(targetDir, { recursive: true });
+    assertRealPathInsideProject(targetDir, plan.projectRoot);
+    assertSafeClaudeMdPath(targetPath, plan.projectRoot);
+
+    if (claudeMd.status === 'planned') {
+      writeNewFile(targetPath, claudeMd.content);
+      writtenFiles.push(claudeMd.relativePath);
+      claudeMd = { ...claudeMd, status: 'written' };
+    } else if (claudeMd.status === 'appended') {
+      appendExistingFile(targetPath, claudeMd.appendBlock);
+      appendedFiles.push(claudeMd.relativePath);
+    }
+  }
+
+  const plannedWrites = plan.plannedWrites.map((write) => {
+    if (write.relativePath === 'CLAUDE.md') {
+      return { ...write, status: claudeMd.status };
+    }
+    if (writtenFiles.includes(write.relativePath)) {
+      return { ...write, status: 'written' as const };
+    }
+    return write;
+  });
+
+  return {
+    ...plan,
+    claudeMd,
+    plannedWrites,
+    writtenFiles,
+    appendedFiles,
+    reviewSuggestions
+  };
+}
+
 export function summarizeProjectStandardsInitResult(result: ProjectStandardsInitResult): ProjectStandardsInitSummary {
   return {
     apply: result.apply,
@@ -269,6 +490,26 @@ export function summarizeProjectStandardsInitResult(result: ProjectStandardsInit
     skillPreflight: result.skillPreflight,
     plannedWrites: result.plannedWrites.map((write) => ({ relativePath: write.relativePath, status: write.status })),
     writtenFiles: result.writtenFiles,
-    skippedFiles: result.plannedWrites.filter((write) => write.status === 'exists').map((write) => write.relativePath)
+    skippedFiles: result.plannedWrites.filter((write) => write.status === 'existing').map((write) => write.relativePath)
+  };
+}
+
+export function summarizeProjectStandardsUpdateResult(result: ProjectStandardsUpdateResult): ProjectStandardsUpdateSummary {
+  return {
+    apply: result.apply,
+    projectRoot: result.projectRoot,
+    language: result.language,
+    source: result.source,
+    skillPreflight: result.skillPreflight,
+    plannedWrites: result.plannedWrites.map((write) => ({ relativePath: write.relativePath, status: write.status })),
+    writtenFiles: result.writtenFiles,
+    appendedFiles: result.appendedFiles,
+    skippedFiles: result.plannedWrites.filter((write) => write.status === 'existing').map((write) => write.relativePath),
+    reviewSuggestions: result.reviewSuggestions,
+    claudeMd: {
+      relativePath: result.claudeMd.relativePath,
+      status: result.claudeMd.status,
+      reviewSuggestions: result.claudeMd.reviewSuggestions
+    }
   };
 }

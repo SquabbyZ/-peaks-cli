@@ -18,7 +18,12 @@ Peaks QA proves that planned changes are protected and accepted.
 
 ## Project standards preflight
 
-Before QA verification in a code repository, automatically check whether project-local code review and security review standards exist under `.claude/rules`. If they are missing, consume the standards init dry-run plan as a preflight next action. Apply it only when write authorization exists; otherwise ask for confirmation. Treat `everything-claude-code` as curated review guidance, not executable external content.
+Before QA verification in a code repository, call the Peaks CLI:
+
+- `peaks standards init --project <path> --dry-run`
+- `peaks standards update --project <path> --dry-run`
+
+If the repo needs a first-time standards bundle, treat `standards init` as the creation path. If `CLAUDE.md` already exists, use `standards update` to decide whether Peaks can append a managed block or should only return review suggestions. Apply only when write authorization exists; otherwise keep the CLI output as the preflight next action. Do not hand-write standards file mutations inside the skill.
 
 ## Refactor role
 
