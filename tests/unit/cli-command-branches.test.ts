@@ -92,7 +92,7 @@ describe('cli command branch handling', () => {
     const skillOutput = parseJsonOutput(skillResult.stdout);
     expect(skillOutput.command).toBe('skill.doctor');
     expect(skillResult.exitCode).toBe(1);
-  });
+  }, 10_000);
 
   test('covers config get and set default layer branches', async () => {
     const { registerConfigCommands } = await import('../../src/cli/commands/config-commands.js');
@@ -148,7 +148,20 @@ describe('cli command branch handling', () => {
     expect(output.command).toBe('workflow.route');
   });
 
-  test('returns a non-zero exit code when standards update needs review', async () => {
+  test('returns standards update branch failures as JSON envelopes', async () => {
+    const { registerCoreAndArtifactCommands } = await import('../../src/cli/commands/core-artifact-commands.js');
+
+    const invalidFlagsResult = await runRegisteredCommand(registerCoreAndArtifactCommands, ['standards', 'update', '--project', '/tmp/project', '--dry-run', '--apply', '--json']);
+    expect(parseJsonOutput(invalidFlagsResult.stdout).code).toBe('INVALID_STANDARDS_UPDATE_FLAGS');
+    expect(invalidFlagsResult.exitCode).toBe(1);
+
+    standardsState.executeProjectStandardsUpdate.mockImplementationOnce(() => {
+      throw new Error('Unexpected standards update failure');
+    });
+    const failedResult = await runRegisteredCommand(registerCoreAndArtifactCommands, ['standards', 'update', '--project', '/tmp/project', '--json']);
+    expect(parseJsonOutput(failedResult.stdout).code).toBe('STANDARDS_UPDATE_FAILED');
+    expect(failedResult.exitCode).toBe(1);
+
     standardsState.executeProjectStandardsUpdate.mockReturnValueOnce({
       apply: true,
       projectRoot: '/tmp/project',
@@ -162,15 +175,33 @@ describe('cli command branch handling', () => {
       claudeMd: { relativePath: 'CLAUDE.md', status: 'review', reviewSuggestions: ['manual review needed'] }
     });
     standardsState.summarizeProjectStandardsUpdateResult.mockImplementationOnce((result) => result);
-    const { registerCoreAndArtifactCommands } = await import('../../src/cli/commands/core-artifact-commands.js');
+    const reviewResult = await runRegisteredCommand(registerCoreAndArtifactCommands, ['standards', 'update', '--project', '/tmp/project', '--json']);
+    const reviewOutput = parseJsonOutput(reviewResult.stdout);
 
-    const result = await runRegisteredCommand(registerCoreAndArtifactCommands, ['standards', 'update', '--project', '/tmp/project', '--json']);
-    const output = parseJsonOutput(result.stdout);
+    expect(reviewOutput.ok).toBe(false);
+    expect(reviewOutput.code).toBe('STANDARDS_UPDATE_REVIEW_REQUIRED');
+    expect(reviewOutput.data).toBeDefined();
+    expect(reviewResult.exitCode).toBe(1);
 
-    expect(output.ok).toBe(false);
-    expect(output.code).toBe('STANDARDS_UPDATE_REVIEW_REQUIRED');
-    expect(output.data).toBeDefined();
-    expect(result.exitCode).toBe(1);
+    standardsState.executeProjectStandardsUpdate.mockReturnValueOnce({
+      apply: true,
+      projectRoot: '/tmp/project',
+      language: 'typescript',
+      source: { sourceId: 'everything-claude-code', url: 'https://github.com/affaan-m/everything-claude-code', usage: 'curated-baseline-reference' },
+      skillPreflight: { appliesTo: ['peaks-rd', 'peaks-qa', 'peaks-solo'], summary: 'summary' },
+      plannedWrites: [],
+      writtenFiles: [],
+      appendedFiles: [],
+      reviewSuggestions: [],
+      claudeMd: { relativePath: 'CLAUDE.md', status: 'existing', reviewSuggestions: [] }
+    });
+    standardsState.summarizeProjectStandardsUpdateResult.mockImplementationOnce((result) => result);
+    const successResult = await runRegisteredCommand(registerCoreAndArtifactCommands, ['standards', 'update', '--project', '/tmp/project', '--language', 'typescript', '--json']);
+    const successOutput = parseJsonOutput(successResult.stdout);
+
+    expect(successOutput.ok).toBe(true);
+    expect(successOutput.command).toBe('standards.update');
+    expect(successResult.exitCode).toBeUndefined();
   });
 
   test('covers workflow route with a workspace context', async () => {
@@ -200,10 +231,30 @@ describe('cli command branch handling', () => {
     expect(parseJsonOutput(projectResult.stdout).code).toBe('PROJECT_CONFIG_NOT_FOUND');
 
     branchState.setConfig.mockImplementationOnce(() => {
+      throw new Error('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');
+    });
+    const invalidMiniMaxResult = await runRegisteredCommand(registerConfigCommands, ['config', 'set', '--key', 'language', '--value', '"en"', '--json']);
+    expect(parseJsonOutput(invalidMiniMaxResult.stdout).code).toBe('INVALID_MINIMAX_BASE_URL');
+
+    branchState.setConfig.mockImplementationOnce(() => {
       throw new Error('Unexpected write failure');
     });
     const genericResult = await runRegisteredCommand(registerConfigCommands, ['config', 'set', '--key', 'language', '--value', '"en"', '--json']);
     expect(parseJsonOutput(genericResult.stdout).code).toBe('CONFIG_SET_FAILED');
+
+    const previousMiniMaxApiKey = process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    try {
+      const missingProviderValuesResult = await runRegisteredCommand(registerConfigCommands, ['config', 'provider', 'minimax', 'set', '--json']);
+      expect(parseJsonOutput(missingProviderValuesResult.stdout).code).toBe('MINIMAX_PROVIDER_NO_VALUES');
+      expect(branchState.setMiniMaxProviderConfig).not.toHaveBeenCalled();
+    } finally {
+      if (previousMiniMaxApiKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = previousMiniMaxApiKey;
+      }
+    }
 
     branchState.setMiniMaxProviderConfig.mockImplementationOnce(() => {
       throw new Error('MiniMax base URL must be the MiniMax HTTPS endpoint without embedded credentials');

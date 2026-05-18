@@ -557,6 +557,49 @@ describe('createProgram', () => {
     expect(layeredOutput.ok).toBe(true);
   });
 
+  test('prints config set validation failures as JSON envelopes', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-config-set-'));
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+    try {
+      const invalidJsonResult = await runCommand(['config', 'set', '--key', 'language', '--value', '{bad', '--json']);
+      expect(parseJsonOutput(invalidJsonResult.stdout).code).toBe('INVALID_JSON');
+      expect(invalidJsonResult.exitCode).toBe(1);
+
+      const sensitiveLayerResult = await runCommand(['config', 'set', '--key', 'providers.minimax.apiKey', '--value', '"secret"', '--layer', 'project', '--json']);
+      expect(parseJsonOutput(sensitiveLayerResult.stdout).code).toBe('SECRET_CONFIG_REQUIRES_USER_LAYER');
+      expect(sensitiveLayerResult.exitCode).toBe(1);
+
+      const invalidLayerResult = await runCommand(['config', 'set', '--key', 'language', '--value', '"zh"', '--layer', 'workspace', '--json']);
+      expect(parseJsonOutput(invalidLayerResult.stdout).code).toBe('INVALID_CONFIG_LAYER');
+      expect(invalidLayerResult.exitCode).toBe(1);
+
+      const invalidMiniMaxResult = await runCommand(['config', 'set', '--key', 'providers.minimax.baseUrl', '--value', '"http://example.com"', '--json']);
+      expect(parseJsonOutput(invalidMiniMaxResult.stdout).code).toBe('INVALID_MINIMAX_BASE_URL');
+      expect(invalidMiniMaxResult.exitCode).toBe(1);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  test('validates artifact repo options when adding workspaces', async () => {
+    const partialResult = await runCommand(['config', 'workspace', 'add', '--id', 'partial-artifacts', '--name', 'Partial Artifacts', '--path', '/tmp/partial-artifacts', '--provider', 'github', '--json']);
+    expect(parseJsonOutput(partialResult.stdout).code).toBe('INVALID_ARTIFACT_REPO_CONFIG');
+    expect(partialResult.exitCode).toBe(1);
+
+    const unsupportedResult = await runCommand(['config', 'workspace', 'add', '--id', 'bad-provider', '--name', 'Bad Provider', '--path', '/tmp/bad-provider', '--provider', 'gitea', '--repo-owner', 'owner', '--repo-name', 'repo', '--json']);
+    expect(parseJsonOutput(unsupportedResult.stdout).code).toBe('UNSUPPORTED_ARTIFACT_PROVIDER');
+    expect(unsupportedResult.exitCode).toBe(1);
+
+    const unsafeSegmentResult = await runCommand(['config', 'workspace', 'add', '--id', 'unsafe-artifacts', '--name', 'Unsafe Artifacts', '--path', '/tmp/unsafe-artifacts', '--provider', 'github', '--repo-owner', '../owner', '--repo-name', 'repo', '--json']);
+    expect(parseJsonOutput(unsafeSegmentResult.stdout).code).toBe('INVALID_ARTIFACT_REPO_CONFIG');
+    expect(unsafeSegmentResult.exitCode).toBe(1);
+
+    const validResult = await runCommand(['config', 'workspace', 'add', '--id', 'valid-artifacts', '--name', 'Valid Artifacts', '--path', '/tmp/valid-artifacts', '--provider', 'gitlab', '--repo-owner', 'owner.name', '--repo-name', 'repo-name', '--json']);
+    const validOutput = parseJsonOutput<{ artifactRepo?: { provider: string; owner: string; name: string } }>(validResult.stdout);
+    expect(validOutput.ok).toBe(true);
+    expect(validOutput.data.artifactRepo).toEqual({ provider: 'gitlab', owner: 'owner.name', name: 'repo-name' });
+  });
+
   test('prints artifact status and accepts valid setup steps', async () => {
     const statusResult = await runCommand(['artifacts', 'status', '--json']);
     const statusOutput = parseJsonOutput(statusResult.stdout);

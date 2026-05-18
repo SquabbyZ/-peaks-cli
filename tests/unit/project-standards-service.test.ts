@@ -1,7 +1,8 @@
+import * as nodeFs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { createProjectStandardsInitPlan, createProjectStandardsUpdatePlan, executeProjectStandardsInit, executeProjectStandardsUpdate, summarizeProjectStandardsInitResult, summarizeProjectStandardsUpdateResult } from '../../src/services/standards/project-standards-service.js';
 
 function createProjectRoot(prefix = 'peaks-standards-project-'): string {
@@ -114,6 +115,24 @@ describe('project standards service', () => {
     expect(secondSummary.writtenFiles).toEqual([]);
   });
 
+  test('flags drifted managed standards blocks for manual review', () => {
+    const projectRoot = createProjectRoot('peaks-standards-update-review-');
+    writeFileSync(join(projectRoot, 'tsconfig.json'), '{}', 'utf8');
+    executeProjectStandardsUpdate({ projectRoot, apply: true });
+    const driftedContent = readFileSync(join(projectRoot, 'CLAUDE.md'), 'utf8').replace('## Peaks Standards Index', '## Drifted Peaks Standards Index');
+    writeFileSync(join(projectRoot, 'CLAUDE.md'), driftedContent, 'utf8');
+
+    const plan = createProjectStandardsUpdatePlan({ projectRoot });
+    const result = executeProjectStandardsUpdate({ projectRoot, apply: true });
+    const summary = summarizeProjectStandardsUpdateResult(result);
+
+    expect(plan.claudeMd.status).toBe('review');
+    expect(plan.claudeMd.reviewSuggestions).toEqual(['Existing CLAUDE.md already has a managed standards block. Review the managed block manually before changing it.']);
+    expect(summary.claudeMd.status).toBe('review');
+    expect(summary.reviewSuggestions).toEqual(['Existing CLAUDE.md already has a managed standards block. Review the managed block manually before changing it.']);
+    expect(summary.appendedFiles).toEqual([]);
+  });
+
   test('detects common project languages and falls back to generic standards', () => {
     const javascriptRoot = createProjectRoot('peaks-standards-javascript-');
     const pythonRoot = createProjectRoot('peaks-standards-python-');
@@ -144,12 +163,35 @@ describe('project standards service', () => {
 
     const unsafeClaudeProjectRoot = createProjectRoot('peaks-standards-unsafe-claude-');
     const outsideClaudeRoot = createProjectRoot('peaks-standards-outside-claude-');
-    writeFileSync(join(outsideClaudeRoot, 'CLAUDE.md'), '# Outside\n', 'utf8');
-    symlinkSync(join(outsideClaudeRoot, 'CLAUDE.md'), join(unsafeClaudeProjectRoot, 'CLAUDE.md'));
+    mkdirSync(join(outsideClaudeRoot, '.claude'), { recursive: true });
+    writeFileSync(join(outsideClaudeRoot, '.claude', 'CLAUDE.md'), '# Outside\n', 'utf8');
+    symlinkSync(join(outsideClaudeRoot, '.claude'), join(unsafeClaudeProjectRoot, '.claude'), 'junction');
 
     expect(() => createProjectStandardsInitPlan({ projectRoot: invalidLanguageRoot, language: 'type/script' })).toThrow('Unsupported standards language');
     expect(() => createProjectStandardsInitPlan({ projectRoot: unsafeProjectRoot, language: 'typescript' })).toThrow('Project standards directory must stay inside the project root');
     expect(() => executeProjectStandardsInit({ projectRoot: nestedUnsafeProjectRoot, language: 'typescript', apply: true })).toThrow('Project standards write target must stay inside the project root');
-    expect(() => createProjectStandardsUpdatePlan({ projectRoot: unsafeClaudeProjectRoot, language: 'typescript' })).toThrow('Project standards CLAUDE.md must stay inside the project root');
+    expect(() => createProjectStandardsUpdatePlan({ projectRoot: unsafeClaudeProjectRoot, language: 'typescript' })).toThrow('Project standards directory must stay inside the project root');
+  });
+
+  test('rejects symlinked CLAUDE.md files during standards update planning', async () => {
+    const projectRoot = createProjectRoot('peaks-standards-unsafe-claude-md-');
+    const claudeMdPath = join(projectRoot, 'CLAUDE.md');
+    writeFileSync(claudeMdPath, '# Linked\n', 'utf8');
+
+    vi.resetModules();
+    vi.doMock('node:fs', () => ({
+      ...nodeFs,
+      lstatSync: (path: Parameters<typeof nodeFs.lstatSync>[0], options?: Parameters<typeof nodeFs.lstatSync>[1]) => {
+        const actualStat = nodeFs.lstatSync(path, options);
+        return String(path) === claudeMdPath ? { ...actualStat, isSymbolicLink: () => true } : actualStat;
+      }
+    }));
+    try {
+      const mockedStandardsService = await import('../../src/services/standards/project-standards-service.js');
+      expect(() => mockedStandardsService.createProjectStandardsUpdatePlan({ projectRoot, language: 'typescript' })).toThrow('Project standards CLAUDE.md must stay inside the project root');
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
   });
 });

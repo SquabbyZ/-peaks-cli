@@ -6,6 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import type { WorkspaceConfig } from '../../src/services/config/config-types.js';
 import { TECH_REQUIRED_ARTIFACTS } from '../../src/services/tech/tech-service.js';
+import { getLocalArtifactPath } from '../../src/services/artifacts/workspace-service.js';
 import { createAutonomousWorkflowPlan } from '../../src/services/workflow/workflow-autonomous-service.js';
 
 function createWorkspace(rootPath = join(tmpdir(), `peaks-autonomous-root-${Date.now()}-${Math.random()}`)): WorkspaceConfig {
@@ -17,13 +18,13 @@ function createWorkspace(rootPath = join(tmpdir(), `peaks-autonomous-root-${Date
   };
 }
 
-function getLocalArtifactPath(rootPath: string): string {
+function getArtifactWorkspacePathFromRoot(rootPath: string): string {
   return join(dirname(rootPath), `${basename(rootPath)}.peaks-artifacts`);
 }
 
 function createWorkspaceWithArtifactWorkspace(): { workspace: WorkspaceConfig; artifactWorkspace: string } {
   const workspace = createWorkspace();
-  const artifactWorkspace = getLocalArtifactPath(workspace.rootPath);
+  const artifactWorkspace = getArtifactWorkspacePathFromRoot(workspace.rootPath);
   mkdirSync(join(artifactWorkspace, '.peaks'), { recursive: true });
   writeFileSync(join(artifactWorkspace, '.peaks', 'config.json'), '{}', 'utf8');
   return { workspace, artifactWorkspace };
@@ -112,6 +113,24 @@ describe('createAutonomousWorkflowPlan', () => {
     expect(plan.blockedReasons).toContain('artifact-workspace-unavailable');
     expect(plan.nextActions.length).toBeGreaterThan(0);
     expect(plan.resumePlan.status).toBe('preview');
+  });
+
+  test('defaults artifact workspace and memory backup paths to the local user workspace path', () => {
+    const workspace = createWorkspace();
+    const plan = createAutonomousWorkflowPlan({
+      mode: 'solo',
+      changeId: 'local-artifact-default',
+      goal: 'Resume autonomous RD planning from artifacts',
+      dryRun: true,
+      workspace
+    });
+
+    expect(plan.available).toBe(false);
+    expect(plan.blockedReasons).toContain('artifact-workspace-unavailable');
+    expect(getLocalArtifactPath(workspace)).toBe(getArtifactWorkspacePathFromRoot(workspace.rootPath));
+    expect(plan.storagePlan.scope).toBe('user-local');
+    expect(plan.storagePlan.artifactWorkspacePath).toBe(getLocalArtifactPath(workspace));
+    expect(plan.storagePlan.memoryBackupPath).toBe(join(getLocalArtifactPath(workspace), '.peaks', 'memory-backups', 'project-memory-primary'));
   });
 
   test('does not inspect resume artifacts when artifact workspace is invalid', () => {

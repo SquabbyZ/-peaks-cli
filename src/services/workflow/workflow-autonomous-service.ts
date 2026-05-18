@@ -1,8 +1,8 @@
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { buildArtifactRelativePath, validateChangeIdOrThrow } from '../../shared/change-id.js';
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
-import { hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
+import { getLocalArtifactPath, hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
 import type { ModelProviderConfig, WorkspaceConfig } from '../config/config-types.js';
 import { createRdSwarmPlan, type RdPlanResult } from '../rd/rd-service.js';
 import { createWorkflowRouterPlan, type SoloMode, type WorkflowMode, type WorkflowRouterPlan } from './workflow-router-service.js';
@@ -76,6 +76,12 @@ export type AutonomousGoalCommand = {
   readonly reason: string;
 };
 
+export type AutonomousStoragePlan = {
+  readonly scope: 'user-local';
+  readonly artifactWorkspacePath: string | null;
+  readonly memoryBackupPath: string | null;
+};
+
 export type AutonomousWorkflowPlan = {
   readonly available: boolean;
   readonly behavior: 'preview' | 'ready';
@@ -86,6 +92,7 @@ export type AutonomousWorkflowPlan = {
   readonly goalPackage: AutonomousGoalPackage;
   readonly goalCommand: AutonomousGoalCommand;
   readonly capabilityPlan: AutonomousCapabilityPlan;
+  readonly storagePlan: AutonomousStoragePlan;
   readonly routePlan: WorkflowRouterPlan;
   readonly modelAssignments: WorkflowRouterPlan['modelAssignments'];
   readonly rdPlan: RdPlanResult;
@@ -123,8 +130,12 @@ function normalizeGoal(goal: string): string {
   return normalized;
 }
 
-function hasArtifactWorkspace(request: AutonomousWorkflowRequest): boolean {
-  return !!request.workspace && !!request.artifactWorkspacePath && hasValidArtifactWorkspace(request.workspace, request.artifactWorkspacePath);
+function resolveArtifactWorkspacePath(request: AutonomousWorkflowRequest): string | undefined {
+  return request.artifactWorkspacePath ?? (request.workspace ? getLocalArtifactPath(request.workspace) : undefined);
+}
+
+function hasArtifactWorkspace(request: AutonomousWorkflowRequest, artifactWorkspacePath: string | undefined): boolean {
+  return !!request.workspace && !!artifactWorkspacePath && hasValidArtifactWorkspace(request.workspace, artifactWorkspacePath);
 }
 
 function createGoalPackage(changeId: string, goal: string): AutonomousGoalPackage {
@@ -461,12 +472,14 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
   validateChangeIdOrThrow(request.changeId);
   const goal = normalizeGoal(request.goal);
   const maxWorkers = request.maxWorkers ?? 40;
+  const artifactWorkspacePath = resolveArtifactWorkspacePath(request);
+  const memoryBackupPath = artifactWorkspacePath ? join(artifactWorkspacePath, '.peaks', 'memory-backups', 'project-memory-primary') : null;
   const sharedWorkspaceOptions = {
-    ...(request.artifactWorkspacePath ? { artifactWorkspacePath: request.artifactWorkspacePath } : {}),
+    ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}),
     ...(request.workspace ? { workspace: request.workspace } : {})
   };
   const goalPackage = createGoalPackage(request.changeId, goal);
-  const available = hasArtifactWorkspace(request);
+  const available = hasArtifactWorkspace(request, artifactWorkspacePath);
   const routePlan = createWorkflowRouterPlan({
     mode: request.mode,
     ...(request.soloMode !== undefined ? { soloMode: request.soloMode } : {}),
@@ -488,7 +501,6 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     ...sharedWorkspaceOptions
   });
   const requiredArtifacts = getResumeRequiredArtifacts(request.changeId);
-  const artifactWorkspacePath = request.artifactWorkspacePath;
   const resumeArtifactsStatus = available && artifactWorkspacePath
     ? getResumeArtifactsStatus(artifactWorkspacePath, requiredArtifacts, request.changeId, goal)
     : 'missing';
@@ -511,6 +523,11 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     goalPackage,
     goalCommand: createGoalCommand(goalPackage),
     capabilityPlan: createCapabilityPlan(),
+    storagePlan: {
+      scope: 'user-local',
+      artifactWorkspacePath: artifactWorkspacePath ?? null,
+      memoryBackupPath: memoryBackupPath ?? null
+    },
     routePlan,
     modelAssignments: routePlan.modelAssignments,
     rdPlan,

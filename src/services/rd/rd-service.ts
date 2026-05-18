@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { stableRealPath } from '../../shared/path-utils.js';
 import { validateChangeIdOrThrow, buildArtifactRelativePath } from '../../shared/change-id.js';
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
-import { hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
+import { getLocalArtifactPath, hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
 import type { WorkspaceConfig } from '../config/config-types.js';
 import { getConfiguredExecutionModelId, STRONGEST_MODEL_ID } from '../config/model-routing.js';
 import { getTechStatus, TECH_REQUIRED_ARTIFACTS } from '../tech/tech-service.js';
@@ -114,24 +114,31 @@ function isClearLowRiskGoal(goal: string): boolean {
   return /^fix\b/i.test(goal) && /\b(typo|spelling|comment|docs?|test|lint|format|copy)\b/i.test(goal);
 }
 
+const MIN_SAFE_SWARM_WORKERS = 25;
+const MAX_SAFE_SWARM_WORKERS = 80;
+
 function resolveWorkerTarget(maxWorkers: number): { workerTarget: number; blockedReasons: string[] } {
   if (!Number.isInteger(maxWorkers) || maxWorkers < 1) {
     throw new Error('max-workers must be a positive integer');
   }
 
-  if (maxWorkers < 25) {
+  if (maxWorkers < MIN_SAFE_SWARM_WORKERS) {
     return { workerTarget: maxWorkers, blockedReasons: ['worker-count-below-target'] };
   }
 
-  if (maxWorkers > 40) {
-    return { workerTarget: 40, blockedReasons: ['worker-count-capped'] };
+  if (maxWorkers > MAX_SAFE_SWARM_WORKERS) {
+    return { workerTarget: MAX_SAFE_SWARM_WORKERS, blockedReasons: ['worker-count-capped'] };
   }
 
   return { workerTarget: maxWorkers, blockedReasons: [] };
 }
 
-function hasPlannerArtifactWorkspace(request: RdSwarmPlanRequest): request is RdSwarmPlanRequest & { artifactWorkspacePath: string; workspace: WorkspaceConfig } {
-  return !!request.workspace && !!request.artifactWorkspacePath && hasValidArtifactWorkspace(request.workspace, request.artifactWorkspacePath);
+function resolveArtifactWorkspacePath(request: Pick<RdSwarmPlanRequest, 'artifactWorkspacePath' | 'workspace'>): string | undefined {
+  return request.artifactWorkspacePath ?? (request.workspace ? getLocalArtifactPath(request.workspace) : undefined);
+}
+
+function hasPlannerArtifactWorkspace(request: RdSwarmPlanRequest, artifactWorkspacePath: string | undefined): artifactWorkspacePath is string {
+  return !!request.workspace && !!artifactWorkspacePath && hasValidArtifactWorkspace(request.workspace, artifactWorkspacePath);
 }
 
 function buildTaskIds(workerTarget: number): string[] {
@@ -249,18 +256,18 @@ function readArtifactFile(rootPath: string, artifactWorkspacePath: string, artif
   }
 }
 
-function getConcreteTargetAreas(request: RdSwarmPlanRequest, hasApprovedTechArtifacts: boolean): string[] {
-  if (!hasApprovedTechArtifacts || !hasPlannerArtifactWorkspace(request)) {
+function getConcreteTargetAreas(request: RdSwarmPlanRequest, artifactWorkspacePath: string | undefined, hasApprovedTechArtifacts: boolean): string[] {
+  if (!artifactWorkspacePath || !hasApprovedTechArtifacts || !hasPlannerArtifactWorkspace(request, artifactWorkspacePath)) {
     return [];
   }
 
-  const architectureRoot = join(request.artifactWorkspacePath, '.peaks', 'changes', request.changeId, 'architecture');
+  const architectureRoot = join(artifactWorkspacePath, '.peaks', 'changes', request.changeId, 'architecture');
   const candidates = TECH_REQUIRED_ARTIFACTS.flatMap((artifact) => {
     if (artifact === 'tech-approval-record.md') {
       return [];
     }
 
-    const content = readArtifactFile(architectureRoot, request.artifactWorkspacePath, artifact);
+    const content = readArtifactFile(architectureRoot, artifactWorkspacePath, artifact);
     return content ? extractImplementationTargetAreas(content) : [];
   });
 
@@ -273,10 +280,11 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
   const swarmMode = request.swarmMode ?? true;
   const executionModelId = request.executionModelId?.trim() || getConfiguredExecutionModelId(undefined);
   const { workerTarget, blockedReasons } = resolveWorkerTarget(request.maxWorkers);
+  const artifactWorkspacePath = resolveArtifactWorkspacePath(request);
   const artifactRoot = buildArtifactRelativePath(request.changeId, 'swarm');
   const techStatus = getTechStatus({
     changeId: request.changeId,
-    ...(request.artifactWorkspacePath ? { artifactWorkspacePath: request.artifactWorkspacePath } : {}),
+    ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}),
     ...(request.workspace ? { workspace: request.workspace } : {}),
   });
   const requiresTechApproval = request.requiresTechApproval ?? !isClearLowRiskGoal(goal);
@@ -360,7 +368,7 @@ function buildPlan(request: RdSwarmPlanRequest): Omit<Extract<RdPlanResult, { av
   }
 
   const taskIds = buildTaskIds(workerTarget);
-  const concreteTargetAreas = getConcreteTargetAreas(request, techStatus.status === 'approved');
+  const concreteTargetAreas = getConcreteTargetAreas(request, artifactWorkspacePath, techStatus.status === 'approved');
   const discoveryTaskIds = taskIds.slice(0, 8);
   const planningTaskIds = taskIds.slice(8, 16);
   const implementationTaskIds = taskIds.slice(16, taskIds.length - 8);
@@ -456,7 +464,9 @@ export function createRdSwarmPlan(request: RdSwarmPlanRequest): RdPlanResult {
   }
 
   const result = buildPlan(request);
-  if (!hasPlannerArtifactWorkspace(request)) {
+  const artifactWorkspacePath = resolveArtifactWorkspacePath(request);
+
+  if (!hasPlannerArtifactWorkspace(request, artifactWorkspacePath)) {
     return {
       available: false,
       behavior: 'preview',

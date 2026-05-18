@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG, type ModelProviderConfig, type WorkspaceConfig } from '../config/config-types.js';
 import { getConfiguredExecutionModelId, STRONGEST_MODEL_ID } from '../config/model-routing.js';
+import { getLocalArtifactPath } from '../artifacts/workspace-service.js';
 import { createRdSwarmPlan, type RdPlanResult } from '../rd/rd-service.js';
 import { createTechPlan, getTechStatus, type TechPlanResult, type TechStatus } from '../tech/tech-service.js';
 import { validateChangeIdOrThrow } from '../../shared/change-id.js';
@@ -146,18 +147,18 @@ export function isSoloMode(value: string): value is SoloMode {
 
 function getDecisionProfileSummary(mode: WorkflowMode, soloMode: SoloMode | undefined): string {
   if (mode === 'team') {
-    return 'Team mode keeps product and design governance on a human-controlled path while the RD execution pipeline remains autonomous.';
+    return 'Team mode keeps product and design governance on a human-controlled path while the RD execution pipeline follows recommended defaults and stays autonomous.';
   }
 
   if (soloMode === 'guided') {
-    return 'Guided mode keeps the user in the decision loop before execution begins, while later execution remains fully autonomous.';
+    return 'Guided mode keeps the user in the decision loop for the early recommended defaults, while later execution remains fully autonomous.';
   }
 
   if (soloMode === 'rnd') {
-    return 'R&D mode asks for technical confirmation up front, then keeps implementation, testing, review, and safety checks fully autonomous.';
+    return 'R&D mode asks for technical confirmation up front, then applies recommended defaults for implementation, testing, review, and safety checks autonomously.';
   }
 
-  return 'Full-auto mode keeps the user out of the loop after the initial goal is given, while the engineering pipeline runs end to end without further prompts.';
+  return 'Full-auto mode applies recommended defaults for product, design, and tech decisions, then runs the engineering pipeline end to end without further prompts.';
 }
 
 function annotateSteps(steps: WorkflowRouterStep[], soloMode: SoloMode): WorkflowRouterStep[] {
@@ -179,10 +180,10 @@ function annotateSteps(steps: WorkflowRouterStep[], soloMode: SoloMode): Workflo
 function createSoloSteps(executionModelId: string): WorkflowRouterStep[] {
   return [
     step({ id: 'solo-product-direction', stage: 'product-direction', owner: 'peaks-solo', modelTier: 'top-tier', reason: 'Product direction needs strong judgment before execution work is delegated.', dependsOn: [] }, executionModelId),
-    step({ id: 'solo-design-direction', stage: 'design-direction', owner: 'peaks-solo', modelTier: 'top-tier', reason: 'Design direction should be set by a stronger model before cheaper implementation work.', dependsOn: ['solo-product-direction'] }, executionModelId),
-    step({ id: 'solo-tech-direction', stage: 'tech-direction', owner: 'peaks-tech', modelTier: 'top-tier', reason: 'Technical boundaries and approval gates need high-confidence planning.', dependsOn: ['solo-design-direction'] }, executionModelId),
-    step({ id: 'solo-tech-review', stage: 'tech-review', owner: 'peaks-tech', modelTier: 'top-tier', reason: 'Tech artifacts and gate decisions require strong review.', dependsOn: ['solo-tech-direction'] }, executionModelId),
-    step({ id: 'solo-rd-planning', stage: 'rd-planning', owner: 'peaks-rd', modelTier: 'top-tier', reason: 'RD task decomposition and acceptance criteria need strong planning before execution delegation.', dependsOn: ['solo-tech-review'] }, executionModelId),
+    step({ id: 'solo-design-direction', stage: 'design-direction', owner: 'peaks-solo', modelTier: 'top-tier', reason: 'Design direction uses the recommended default before cheaper implementation work.', dependsOn: ['solo-product-direction'] }, executionModelId),
+    step({ id: 'solo-tech-direction', stage: 'tech-direction', owner: 'peaks-tech', modelTier: 'top-tier', reason: 'Technical boundaries and approval gates use the recommended default with high-confidence planning.', dependsOn: ['solo-design-direction'] }, executionModelId),
+    step({ id: 'solo-tech-review', stage: 'tech-review', owner: 'peaks-tech', modelTier: 'top-tier', reason: 'Tech artifacts and gate decisions require strong review and a recommended default path.', dependsOn: ['solo-tech-direction'] }, executionModelId),
+    step({ id: 'solo-rd-planning', stage: 'rd-planning', owner: 'peaks-rd', modelTier: 'top-tier', reason: 'RD task decomposition and acceptance criteria use the recommended default before execution delegation.', dependsOn: ['solo-tech-review'] }, executionModelId),
     step({ id: 'solo-coding-execution', stage: 'coding-execution', owner: 'peaks-rd', modelTier: executionModelId === STRONGEST_MODEL_ID ? 'top-tier' : 'mid-tier', reason: `Coding and routine refactoring must use the configured execution worker model ${executionModelId}.`, dependsOn: ['solo-rd-planning'] }, executionModelId),
     step({ id: 'solo-unit-test-execution', stage: 'unit-test-execution', owner: 'peaks-rd', modelTier: executionModelId === STRONGEST_MODEL_ID ? 'top-tier' : 'mid-tier', reason: `Unit test authoring and focused test runs must use the configured execution worker model ${executionModelId}.`, dependsOn: ['solo-coding-execution'] }, executionModelId),
     step({ id: 'solo-quality-review', stage: 'quality-review', owner: 'peaks-solo', modelTier: 'top-tier', reason: 'Reducer and final quality gates need strong synthesis and risk review.', dependsOn: ['solo-unit-test-execution'] }, executionModelId)
@@ -282,8 +283,9 @@ export function createWorkflowRouterPlan(request: WorkflowRouterRequest): Workfl
   const modeStatus = createModeStatus(economyMode, swarmMode, executionModelId, economyMode ? 'config.providers' : 'planner-reviewer-strongest-model');
   const soloMode = getSoloMode(request.mode, request.soloMode);
   const decisionProfile = getDecisionProfileSummary(request.mode, soloMode);
+  const artifactWorkspacePath = request.artifactWorkspacePath ?? (request.workspace ? getLocalArtifactPath(request.workspace) : undefined);
   const sharedWorkspaceOptions = {
-    ...(request.artifactWorkspacePath ? { artifactWorkspacePath: request.artifactWorkspacePath } : {}),
+    ...(artifactWorkspacePath ? { artifactWorkspacePath } : {}),
     ...(request.workspace ? { workspace: request.workspace } : {})
   };
   const techStatus = getTechStatus({ changeId: request.changeId, ...sharedWorkspaceOptions });

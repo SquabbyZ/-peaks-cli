@@ -230,6 +230,23 @@ describe('createWorkflowRouterPlan', () => {
     expect(plan.nextActions).toEqual(['Lower max-workers to match the current change scope or accept the capped target.']);
   });
 
+  test('uses the workspace default artifact path for workflow planning', () => {
+    const { workspace } = createApprovedWorkspace('default-workflow-artifacts');
+    const plan = createWorkflowRouterPlan({
+      changeId: 'default-workflow-artifacts',
+      goal: 'Fix checkout retry typo',
+      mode: 'solo',
+      maxWorkers: 40,
+      dryRun: true,
+      workspace
+    });
+
+    expect(plan.techStatus.status).toBe('approved');
+    expect(plan.techPlan.available).toBe(true);
+    expect(plan.rdPlan.available).toBe(true);
+    expect(plan.blockedReasons).toEqual([]);
+  });
+
   test('returns no next actions when all route prerequisites are available', () => {
     const { workspace, artifactWorkspace } = createApprovedWorkspace('approved-route');
     const plan = createWorkflowRouterPlan({

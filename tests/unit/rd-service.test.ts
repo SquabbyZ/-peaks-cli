@@ -98,6 +98,21 @@ describe('createRdSwarmPlan', () => {
     expect(plan.nextActions).toEqual(['Run peaks tech plan --dry-run and approve the tech plan before running peaks swarm plan.']);
   });
 
+  test('uses the workspace default artifact path when no explicit artifact path is provided', () => {
+    const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
+    const architectureRoot = join(artifactWorkspace, '.peaks', 'changes', 'default-artifact-workspace', 'architecture');
+    mkdirSync(architectureRoot, { recursive: true });
+    for (const artifact of TECH_REQUIRED_ARTIFACTS) {
+      writeFileSync(join(architectureRoot, artifact), artifact === 'tech-approval-record.md' ? 'status: approved' : 'ready', 'utf8');
+    }
+
+    const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'default-artifact-workspace', goal: 'Implement approved checkout refactor', maxWorkers: 40, dryRun: true, workspace });
+
+    expect(plan.available).toBe(true);
+    expect(plan.outputs.taskGraph).toBe('.peaks/changes/default-artifact-workspace/swarm/task-graph.json');
+    expect(plan.blockedReasons).toEqual([]);
+  });
+
   test('represents coding and unit-test execution as configured-model swarm workers', () => {
     const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
     const architectureRoot = join(artifactWorkspace, '.peaks', 'changes', 'configured-execution-workers', 'architecture');
@@ -621,11 +636,28 @@ describe('createRdSwarmPlan', () => {
     expect(plan.blockedReasons).toContain('worker-count-below-target');
   });
 
-  test('caps worker count above 40', () => {
+  test('supports larger safe swarm plans up to eighty workers', () => {
+    const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
+    const architectureRoot = join(artifactWorkspace, '.peaks', 'changes', 'checkout-refactor', 'architecture');
+    mkdirSync(architectureRoot, { recursive: true });
+    for (const artifact of TECH_REQUIRED_ARTIFACTS) {
+      writeFileSync(join(architectureRoot, artifact), artifact === 'tech-approval-record.md' ? 'status: approved' : 'ready', 'utf8');
+    }
+
+    const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Implement approved checkout refactor', maxWorkers: 80, dryRun: true, artifactWorkspacePath: artifactWorkspace, workspace });
+
+    expect(plan.available).toBe(true);
+    if (!plan.available) return;
+    expect(plan.workerTarget).toBe(80);
+    expect(plan.tasks.length).toBeLessThanOrEqual(80);
+    expect(plan.tasks.filter((task) => task.wave === 'implementation candidates').length).toBeGreaterThan(40);
+  });
+
+  test('caps worker count above eighty', () => {
     const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
     const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Implement approved checkout refactor', maxWorkers: 99, dryRun: true, artifactWorkspacePath: artifactWorkspace, workspace });
 
-    expect(plan.workerTarget).toBe(40);
+    expect(plan.workerTarget).toBe(80);
     expect(plan.blockedReasons).toContain('worker-count-capped');
   });
 
@@ -641,7 +673,7 @@ describe('createRdSwarmPlan', () => {
 
     expect(plan.available).toBe(false);
     if (plan.available) return;
-    expect(plan.workerTarget).toBe(40);
+    expect(plan.workerTarget).toBe(80);
     expect(plan.blockedReasons).toContain('worker-count-capped');
     expect(plan.nextActions).toEqual(['Lower max-workers to match the current change scope or accept the capped target.']);
   });

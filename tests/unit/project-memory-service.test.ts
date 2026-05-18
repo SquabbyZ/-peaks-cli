@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { platform, tmpdir } from 'node:os';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import {
   createProjectMemoryBackupPlan,
   createProjectMemoryExtractPlan,
@@ -104,6 +104,142 @@ describe('project memory service', () => {
     expect(backupPlan.apply).toBe(false);
   });
 
+  test('resolves relative artifact paths against a non-Windows project root', () => {
+    const projectRoot = createTempDir('peaks-memory-unix-project');
+    const relativeArtifactPath = join('artifacts', 'unix.md');
+    const artifactPath = join(projectRoot, relativeArtifactPath);
+    mkdirSync(join(projectRoot, 'artifacts'), { recursive: true });
+    writeFileSync(artifactPath, [
+      '<!-- peaks-memory:start -->',
+      'title: Unix relative memory',
+      'kind: project',
+      '---',
+      'Relative artifact paths resolve through resolve().',
+      '<!-- peaks-memory:end -->'
+    ].join('\n'), 'utf8');
+
+    const plan = createProjectMemoryExtractPlan({ projectRoot, artifactPaths: [relativeArtifactPath], apply: false });
+
+    expect(plan.extractedMemories[0]?.sourceArtifact).toBe('artifacts/unix.md');
+  });
+
+  test('resolves relative artifact paths for a mocked non-Windows project root', async () => {
+    vi.resetModules();
+    vi.doMock('../../src/shared/path-utils.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/shared/path-utils.js')>('../../src/shared/path-utils.js');
+      return {
+        ...actual,
+        isWindowsAbsolutePath: () => false,
+        isInsidePath: (childPath: string, parentPath: string) => childPath === parentPath || childPath.startsWith(`${parentPath}/`),
+        normalizePath: (value: string) => value.replaceAll('\\', '/'),
+        resolveInputPath: (value: string) => value.replaceAll('\\', '/'),
+        stableRealPath: (value: string) => value.replaceAll('\\', '/')
+      };
+    });
+    vi.doMock('node:fs', async () => {
+      const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+      const normalizeMockPath = (value: unknown) => String(value).replaceAll('\\', '/').replace(/^[A-Za-z]:/, '');
+      const projectRoot = '/tmp/project';
+      const artifactPath = '/tmp/project/artifacts/unix.md';
+      const knownPaths = new Set([projectRoot, artifactPath]);
+      return {
+        ...actual,
+        existsSync: (path: Parameters<typeof actual.existsSync>[0]) => knownPaths.has(normalizeMockPath(path)),
+        lstatSync: (path: Parameters<typeof actual.lstatSync>[0]) => {
+          const normalizedPath = normalizeMockPath(path);
+          if (!knownPaths.has(normalizedPath)) {
+            throw new Error(`Unexpected path: ${normalizedPath}`);
+          }
+          return { isSymbolicLink: () => false } as ReturnType<typeof actual.lstatSync>;
+        },
+        realpathSync: (path: Parameters<typeof actual.realpathSync>[0]) => {
+          const normalizedPath = normalizeMockPath(path);
+          if (!knownPaths.has(normalizedPath)) {
+            throw new Error(`Unexpected path: ${normalizedPath}`);
+          }
+          return normalizedPath;
+        },
+        readdirSync: () => [],
+        readFileSync: (path: Parameters<typeof actual.readFileSync>[0]) => {
+          if (normalizeMockPath(path) !== artifactPath) {
+            throw new Error(`Unexpected path: ${String(path)}`);
+          }
+          return [
+            '<!-- peaks-memory:start -->',
+            'title: Mocked relative memory',
+            'kind: project',
+            '---',
+            'Relative artifact paths resolve through resolve().',
+            '<!-- peaks-memory:end -->'
+          ].join('\n');
+        }
+      };
+    });
+
+    try {
+      const { createProjectMemoryExtractPlan: createMockedProjectMemoryExtractPlan } = await import('../../src/services/memory/project-memory-service.js');
+      const plan = createMockedProjectMemoryExtractPlan({ projectRoot: '/tmp/project', artifactPaths: ['artifacts/unix.md'], apply: false });
+
+      expect(plan.extractedMemories[0]?.sourceArtifact).toBe('artifacts/unix.md');
+    } finally {
+      vi.doUnmock('../../src/shared/path-utils.js');
+      vi.doUnmock('node:fs');
+      vi.resetModules();
+    }
+  });
+
+  test('normalizes absolute artifact paths while resolving extraction plans', () => {
+    const projectRoot = createTempDir('peaks-memory-absolute');
+    const artifactPath = join(projectRoot, 'artifact.md');
+    writeFileSync(artifactPath, [
+      '<!-- peaks-memory:start -->',
+      'title: Absolute artifact memory',
+      'kind: project',
+      '---',
+      'Absolute artifact paths resolve directly.',
+      '<!-- peaks-memory:end -->'
+    ].join('\n'), 'utf8');
+
+    const plan = createProjectMemoryExtractPlan({ projectRoot, artifactPaths: [artifactPath], apply: false });
+
+    expect(plan.extractedMemories[0]?.sourceArtifact).toBe('artifact.md');
+  });
+
+  test.runIf(platform() === 'win32')('supports drive-letter absolute artifact paths', () => {
+    const projectRoot = createTempDir('peaks-memory-drive-letter');
+    const artifactPath = join(projectRoot, 'artifact.md');
+    writeFileSync(artifactPath, [
+      '<!-- peaks-memory:start -->',
+      'title: Drive letter memory',
+      'kind: project',
+      '---',
+      'Drive-letter absolute paths resolve directly.',
+      '<!-- peaks-memory:end -->'
+    ].join('\n'), 'utf8');
+
+    const plan = createProjectMemoryExtractPlan({ projectRoot, artifactPaths: [artifactPath], apply: false });
+
+    expect(plan.extractedMemories[0]?.sourceArtifact).toBe('artifact.md');
+  });
+
+  test.runIf(platform() === 'win32')('supports drive-rooted absolute artifact paths', () => {
+    const projectRoot = createTempDir('peaks-memory-drive-rooted');
+    const artifactPath = join(projectRoot, 'artifact.md');
+    writeFileSync(artifactPath, [
+      '<!-- peaks-memory:start -->',
+      'title: Drive rooted memory',
+      'kind: project',
+      '---',
+      'Drive-rooted absolute paths resolve from the current drive.',
+      '<!-- peaks-memory:end -->'
+    ].join('\n'), 'utf8');
+
+    const driveRootedArtifact = artifactPath.slice(2);
+    const plan = createProjectMemoryExtractPlan({ projectRoot, artifactPaths: [driveRootedArtifact], apply: false });
+
+    expect(plan.extractedMemories[0]?.sourceArtifact).toBe('artifact.md');
+  });
+
   test('writes extracted memories only when apply is true and keeps output deterministic', () => {
     const projectRoot = createTempDir('peaks-memory-apply');
     const artifactPath = join(projectRoot, 'artifacts', 'qa.md');
@@ -120,7 +256,7 @@ describe('project memory service', () => {
     const result = executeProjectMemoryExtract({ projectRoot, artifactPaths: [artifactPath], apply: true });
     const memoryPath = join(projectRoot, '.claude', 'memory', 'marketplace-approval-chain.md');
 
-    expect(result.writtenFiles).toEqual([memoryPath]);
+    expect(result.writtenFiles.map((filePath) => filePath.replaceAll('\\', '/'))).toEqual([memoryPath.replaceAll('\\', '/')]);
     expect(readFileSync(memoryPath, 'utf8')).toContain('name: marketplace-approval-chain');
     expect(readFileSync(memoryPath, 'utf8')).toContain('Marketplace publishing is only allowed after team publishing succeeds.');
   });

@@ -1,5 +1,6 @@
+import * as nodeFs from 'node:fs';
 import { mkdirSync, realpathSync, rmSync } from 'node:fs';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { getTempDir, isInsidePath, isWindowsAbsolutePath, localPath, normalizePath, pathsEqual, resolveInputPath, stablePath } from '../../src/shared/path-utils.js';
@@ -76,6 +77,25 @@ describe('stablePath', () => {
       expect(stablePath(join(existing, 'missing', 'file.txt'))).toBe(join(realpathSync(existing), 'missing', 'file.txt'));
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('returns a rooted path when no existing parent is found before the filesystem root', () => {
+    expect(stablePath('/missing-root/file.txt')).toBe(resolve('/missing-root/file.txt'));
+  });
+
+  test('uses parsed root when filesystem existence changes during stable path resolution', async () => {
+    vi.resetModules();
+    vi.doMock('node:fs', () => ({
+      ...nodeFs,
+      existsSync: () => false
+    }));
+    try {
+      const mockedPathUtils = await import('../../src/shared/path-utils.js');
+      expect(mockedPathUtils.stablePath('/volatile/path')).toBe(resolve('/volatile/path'));
+    } finally {
+      vi.doUnmock('node:fs');
+      vi.resetModules();
     }
   });
 
