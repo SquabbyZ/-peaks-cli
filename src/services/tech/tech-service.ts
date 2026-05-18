@@ -1,5 +1,6 @@
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { isInsidePath, stableRealPath } from '../../shared/path-utils.js';
 import { buildArtifactRelativePath, validateChangeIdOrThrow } from '../../shared/change-id.js';
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
 import type { WorkspaceConfig } from '../config/config-types.js';
@@ -113,18 +114,13 @@ function hasPlannerArtifactWorkspace(artifactWorkspacePath: string, workspace?: 
   return !!workspace && hasValidArtifactWorkspace(workspace, artifactWorkspacePath);
 }
 
-function isInsidePath(childPath: string, parentPath: string): boolean {
-  const relativePath = relative(parentPath, childPath);
-  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
-}
-
 function isEscapedArchitectureRoot(rootPath: string, artifactWorkspacePath: string): boolean {
   if (!existsSync(rootPath)) {
     return false;
   }
 
   try {
-    return !isInsidePath(realpathSync(rootPath), realpathSync(artifactWorkspacePath));
+    return !isInsidePath(stableRealPath(rootPath), stableRealPath(artifactWorkspacePath));
   } catch {
     return true;
   }
@@ -136,7 +132,7 @@ function isValidArtifactFile(rootPath: string, artifact: string): boolean {
     const artifactStat = lstatSync(artifactPath);
     if (artifactStat.isSymbolicLink()) return false;
     if (!artifactStat.isFile()) return false;
-    if (!isInsidePath(realpathSync(artifactPath), realpathSync(rootPath))) return false;
+    if (!isInsidePath(stableRealPath(artifactPath), stableRealPath(rootPath))) return false;
     return true;
   } catch {
     return false;

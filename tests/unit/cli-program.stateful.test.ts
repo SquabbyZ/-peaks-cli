@@ -204,7 +204,7 @@ describe('createProgram', () => {
     expect(output.data.model).toBe('MiniMax-M2.7');
     expect(output.data.summary).toBeNull();
     expect(result.stdout.join('\n')).not.toContain(secret);
-    expect(getMinimaxSmokeTest()).toHaveBeenCalledWith({ baseUrl, apiKey: secret }, { model: 'MiniMax-M2.7' });
+    expect(getMinimaxSmokeTest()).toHaveBeenCalledWith({ baseUrl, apiKey: secret, model: 'minimax-2.7' }, { model: 'MiniMax-M2.7' });
   });
 
   test('config provider minimax test reports unconfigured and failed smoke tests', async () => {

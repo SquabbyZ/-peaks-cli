@@ -604,12 +604,46 @@ describe('createRdSwarmPlan', () => {
     expect(plan.tasks.length).toBeLessThanOrEqual(plan.workerTarget);
   });
 
+  test('does not mark the tech gate skipped when governed work has too few workers', () => {
+    const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
+    const architectureRoot = join(artifactWorkspace, '.peaks', 'changes', 'checkout-refactor', 'architecture');
+    mkdirSync(architectureRoot, { recursive: true });
+    for (const artifact of TECH_REQUIRED_ARTIFACTS) {
+      writeFileSync(join(architectureRoot, artifact), artifact === 'tech-approval-record.md' ? 'status: approved' : 'ready', 'utf8');
+    }
+
+    const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Implement approved checkout refactor', maxWorkers: 10, dryRun: true, artifactWorkspacePath: artifactWorkspace, workspace });
+
+    expect(plan.available).toBe(false);
+    if (plan.available) return;
+    expect(plan.gateStatus.techApprovalRequired).toBe(true);
+    expect(plan.gateStatus.skipReason).toBeUndefined();
+    expect(plan.blockedReasons).toContain('worker-count-below-target');
+  });
+
   test('caps worker count above 40', () => {
     const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
     const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Implement approved checkout refactor', maxWorkers: 99, dryRun: true, artifactWorkspacePath: artifactWorkspace, workspace });
 
     expect(plan.workerTarget).toBe(40);
     expect(plan.blockedReasons).toContain('worker-count-capped');
+  });
+
+  test('returns capped approved swarm plans with next actions', () => {
+    const { workspace, artifactWorkspace } = createWorkspaceWithArtifactWorkspace();
+    const architectureRoot = join(artifactWorkspace, '.peaks', 'changes', 'checkout-refactor', 'architecture');
+    mkdirSync(architectureRoot, { recursive: true });
+    for (const artifact of TECH_REQUIRED_ARTIFACTS) {
+      writeFileSync(join(architectureRoot, artifact), artifact === 'tech-approval-record.md' ? 'status: approved' : 'ready', 'utf8');
+    }
+
+    const plan = createRdSwarmPlan({ skill: 'rd', changeId: 'checkout-refactor', goal: 'Implement approved checkout refactor', maxWorkers: 99, dryRun: true, artifactWorkspacePath: artifactWorkspace, workspace });
+
+    expect(plan.available).toBe(false);
+    if (plan.available) return;
+    expect(plan.workerTarget).toBe(40);
+    expect(plan.blockedReasons).toContain('worker-count-capped');
+    expect(plan.nextActions).toEqual(['Lower max-workers to match the current change scope or accept the capped target.']);
   });
 
   test('blocks when tech approval is required but missing', () => {

@@ -136,6 +136,23 @@ describe('cli command branch handling', () => {
     expect(output.command).toBe('workflow.route');
   });
 
+  test('covers workflow route with a workspace context', async () => {
+    const { registerWorkflowCommands } = await import('../../src/cli/commands/workflow-commands.js');
+    branchState.getCurrentWorkspaceConfig.mockReturnValueOnce({
+      workspaceId: 'branch-workspace',
+      name: 'Branch Workspace',
+      rootPath: '/tmp/branch-workspace',
+      installedCapabilityIds: []
+    });
+
+    const harness = createHarness(registerWorkflowCommands);
+    await harness.program.parseAsync(['node', 'peaks', 'workflow', 'route', '--mode', 'solo', '--change-id', 'checkout-refactor', '--goal', 'Refactor checkout API', '--json'], { from: 'node' });
+
+    const output = parseJsonOutput(harness.stdout);
+    expect(output.ok).toBe(true);
+    expect(output.command).toBe('workflow.route');
+  });
+
   test('maps config set and provider set service errors', async () => {
     const { registerConfigCommands } = await import('../../src/cli/commands/config-commands.js');
 

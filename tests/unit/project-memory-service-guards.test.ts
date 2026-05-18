@@ -7,6 +7,7 @@ const realPaths = new Map<string, string>([
   ['C:/artifact-project/link.md', 'C:/artifact-project/link.md'],
   ['C:/write-project', 'C:/write-project'],
   ['C:/write-project/artifact.md', 'C:/write-project/artifact.md'],
+  ['C:/write-project/.claude/memory/race-memory.md', 'C:/outside/race-memory.md'],
   ['C:/backup-project', 'C:/backup-project'],
   ['C:/backup-project/.claude/memory', 'C:/backup-project/.claude/memory'],
   ['C:/backup-project/.claude/memory/link.md', 'C:/outside/link.md'],
@@ -16,10 +17,13 @@ const symlinkPaths = new Set<string>(['C:/artifact-project/link.md']);
 let hasCreatedWriteMemoryDir = false;
 
 function normalizeMockPath(path: string): string {
-  return path.replaceAll('\\', '/');
+  const normalized = path.replaceAll('\\', '/');
+  const driveIndex = normalized.search(/[A-Za-z]:\//);
+  return driveIndex >= 0 ? normalized.slice(driveIndex) : normalized;
 }
 
 vi.mock('node:fs', () => ({
+  constants: { O_WRONLY: 1, O_CREAT: 64, O_EXCL: 128 },
   copyFileSync: vi.fn(),
   existsSync: vi.fn((path: string) => {
     const normalizedPath = normalizeMockPath(path);
@@ -53,9 +57,6 @@ vi.mock('node:fs', () => ({
     : 'safe memory'),
   realpathSync: vi.fn((path: string) => {
     const normalizedPath = normalizeMockPath(path);
-    if (normalizedPath === 'C:/write-project/.claude/memory' && hasCreatedWriteMemoryDir) {
-      return 'C:/write-project/.claude/elsewhere';
-    }
     return realPaths.get(normalizedPath) ?? normalizedPath;
   }),
   openSync: vi.fn(() => {
@@ -84,6 +85,18 @@ describe('project memory service guard branches', () => {
       artifactPaths: ['C:/artifact-project/link.md'],
       apply: false
     })).toThrow('Artifact path must stay inside the project root');
+  });
+
+  test('resolves relative artifact paths from Windows-style project roots', async () => {
+    const { createProjectMemoryExtractPlan } = await import('../../src/services/memory/project-memory-service.js');
+
+    const plan = createProjectMemoryExtractPlan({
+      projectRoot: 'C:/write-project',
+      artifactPaths: ['artifact.md'],
+      apply: false
+    });
+
+    expect(plan.extractedMemories[0]?.sourceArtifact).toBe('artifact.md');
   });
 
   test('revalidates memory write targets during apply', async () => {

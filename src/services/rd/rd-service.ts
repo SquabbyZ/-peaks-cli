@@ -1,5 +1,6 @@
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { stableRealPath } from '../../shared/path-utils.js';
 import { validateChangeIdOrThrow, buildArtifactRelativePath } from '../../shared/change-id.js';
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
 import { hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
@@ -206,8 +207,8 @@ const MAX_ARTIFACT_BYTES = 256_000;
 function readArtifactFile(rootPath: string, artifactWorkspacePath: string, artifact: string): string | null {
   const artifactPath = resolve(rootPath, artifact);
   try {
-    const artifactWorkspaceRealPath = realpathSync(artifactWorkspacePath);
-    const rootRealPath = realpathSync(rootPath);
+    const artifactWorkspaceRealPath = stableRealPath(artifactWorkspacePath);
+    const rootRealPath = stableRealPath(rootPath);
     if (!isInsidePath(rootRealPath, artifactWorkspaceRealPath)) {
       return null;
     }
@@ -216,7 +217,7 @@ function readArtifactFile(rootPath: string, artifactWorkspacePath: string, artif
     if (artifactStat.isSymbolicLink() || !artifactStat.isFile() || artifactStat.size > MAX_ARTIFACT_BYTES) {
       return null;
     }
-    if (!isInsidePath(realpathSync(artifactPath), rootRealPath)) {
+    if (!isInsidePath(stableRealPath(artifactPath), rootRealPath)) {
       return null;
     }
 

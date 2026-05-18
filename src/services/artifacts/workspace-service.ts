@@ -1,6 +1,7 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
-import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
+import { isInsidePath, stablePath } from '../../shared/path-utils.js';
 import { readConfig, getCurrentWorkspaceConfig } from '../config/config-service.js';
 import type { WorkspaceConfig } from '../config/config-types.js';
 import { pathExists } from '../../shared/fs.js';
@@ -29,21 +30,12 @@ export type SyncResult = {
   error?: string;
 };
 
-function isInsidePath(childPath: string, parentPath: string): boolean {
-  const relativePath = relative(parentPath, childPath);
-  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
-}
-
 function canonicalPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
+  return stablePath(path);
 }
 
 function canonicalChildPath(parentPath: string, ...segments: string[]): string {
-  return canonicalPath(resolve(parentPath, ...segments));
+  return stablePath(resolve(parentPath, ...segments));
 }
 
 export function getLocalArtifactPath(workspace: WorkspaceConfig): string {

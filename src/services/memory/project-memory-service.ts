@@ -1,5 +1,6 @@
 import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { isInsidePath, isWindowsAbsolutePath, normalizePath, resolveInputPath, stablePath, stableRealPath } from '../../shared/path-utils.js';
 import { containsSensitiveConfigValue, isSensitiveConfigPath } from '../config/config-service.js';
 
 export type ProjectMemoryKind = 'project' | 'rule' | 'decision' | 'reference' | 'feedback';
@@ -90,12 +91,11 @@ const END_MARKER = '<!-- peaks-memory:end -->';
 const VALID_MEMORY_KINDS = new Set<ProjectMemoryKind>(['project', 'rule', 'decision', 'reference', 'feedback']);
 
 function normalizeRoot(path: string): string {
-  return realpathSync(resolve(path));
+  return resolveInputPath(path);
 }
 
-function isInsidePath(childPath: string, parentPath: string): boolean {
-  const rel = relative(parentPath, childPath);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+function normalizeRealRoot(path: string): string {
+  return stableRealPath(path);
 }
 
 function realPathOrThrow(path: string, errorMessage: string): string {
@@ -109,19 +109,27 @@ function realPathOrThrow(path: string, errorMessage: string): string {
   return realpathSync(path);
 }
 
+function resolveProjectPath(path: string, projectRoot: string): string {
+  if (isWindowsAbsolutePath(path)) return normalizePath(path);
+  if (isAbsolute(path)) return resolve(path);
+  const resolvedPath = join(projectRoot, path);
+  return isWindowsAbsolutePath(projectRoot) ? normalizePath(resolvedPath) : resolve(resolvedPath);
+}
+
 function assertInsideProject(path: string, projectRoot: string): string {
   const resolvedRoot = normalizeRoot(projectRoot);
-  const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(resolvedRoot, path);
+  const resolvedPath = resolveProjectPath(path, resolvedRoot);
   const realProjectRoot = realPathOrThrow(resolvedRoot, 'Project root is not accessible');
   const realArtifactPath = realPathOrThrow(resolvedPath, 'Artifact path must stay inside the project root');
   if (!isInsidePath(realArtifactPath, realProjectRoot)) {
     throw new Error('Artifact path must stay inside the project root');
   }
-  return realArtifactPath;
+  return resolvedPath;
 }
 
 function assertSafeProjectMemoryDir(projectRoot: string): string {
   const resolvedRoot = normalizeRoot(projectRoot);
+  const realRoot = normalizeRealRoot(projectRoot);
   const claudeDir = join(resolvedRoot, '.claude');
   if (existsSync(claudeDir) && lstatSync(claudeDir).isSymbolicLink()) {
     throw new Error('Project memory directory must stay inside the project root');
@@ -133,10 +141,10 @@ function assertSafeProjectMemoryDir(projectRoot: string): string {
       throw new Error('Project memory directory must stay inside the project root');
     }
     const realMemoryDir = realpathSync(memoryDir);
-    if (!isInsidePath(realMemoryDir, resolvedRoot)) {
+    if (!isInsidePath(realMemoryDir, realRoot)) {
       throw new Error('Project memory directory must stay inside the project root');
     }
-    return realMemoryDir;
+    return memoryDir;
   }
 
   return memoryDir;
@@ -347,8 +355,9 @@ export function executeProjectMemoryExtract(options: ExtractPlanOptions): Projec
     mkdirSync(plan.primaryMemoryDir, { recursive: true });
     const safeMemoryDir = assertSafeProjectMemoryDir(plan.projectRoot);
     for (const write of plan.plannedWrites) {
-      const targetPath = resolve(write.filePath);
-      if (!isInsidePath(targetPath, safeMemoryDir)) {
+      const targetPath = resolveInputPath(write.filePath);
+      const stableTargetPath = stablePath(targetPath);
+      if (!isInsidePath(stableTargetPath, stableRealPath(safeMemoryDir))) {
         throw new Error('Project memory write target must stay inside the project memory directory');
       }
       writeNewFile(targetPath, write.content);
@@ -396,7 +405,7 @@ export function executeProjectMemoryBackup(options: BackupPlanOptions): ProjectM
     mkdirSync(plan.backupMemoryDir, { recursive: true });
     for (const copy of plan.plannedCopies) {
       const sourcePath = realPathOrThrow(copy.sourcePath, 'Project memory source must stay inside the project memory directory');
-      if (!isInsidePath(sourcePath, safeMemoryDir)) {
+      if (!isInsidePath(sourcePath, stableRealPath(safeMemoryDir))) {
         throw new Error('Project memory source must stay inside the project memory directory');
       }
       mkdirSync(dirname(copy.targetPath), { recursive: true });
