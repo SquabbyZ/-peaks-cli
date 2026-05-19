@@ -257,7 +257,7 @@ function addWorkflowRouteOptions(command: Command, description: string): Command
 
 function addSwarmPlanOptions(command: Command, includeSkill: boolean): Command {
   const configured = command
-    .description('Generate an RD swarm dry-run graph')
+    .description('Plan an RD swarm dry-run graph')
     .requiredOption('--change-id <id>', 'change identifier')
     .requiredOption('--goal <goal>', 'planning goal')
     .option('--max-workers <count>', 'maximum worker count', '40')
@@ -302,10 +302,10 @@ export function registerWorkflowCommands(program: Command, io: ProgramIO): void 
   addTechStatusOptions(program.command('tech-status')).action((options: TechStatusOptions) => runTechStatus(io, options));
 
   const workflow = program.command('workflow').description('Plan workflow routing dry-run graphs');
-  addWorkflowRouteOptions(workflow.command('route'), 'Generate a workflow routing dry-run plan').action((options: WorkflowRouteOptions) => runWorkflowRoute(io, options));
-  addWorkflowRouteOptions(program.command('route'), 'Generate a workflow routing dry-run plan').action((options: WorkflowRouteOptions) => runWorkflowRoute(io, options));
-  addWorkflowRouteOptions(workflow.command('autonomous'), 'Generate an autonomous workflow dry-run plan').action((options: WorkflowRouteOptions) => runAutonomousWorkflow(io, options));
-  addWorkflowRouteOptions(program.command('autonomous'), 'Generate an autonomous workflow dry-run plan').action((options: WorkflowRouteOptions) => runAutonomousWorkflow(io, options));
+  addWorkflowRouteOptions(workflow.command('route'), 'Plan a workflow routing dry-run summary').action((options: WorkflowRouteOptions) => runWorkflowRoute(io, options));
+  addWorkflowRouteOptions(program.command('route'), 'Plan a workflow routing dry-run summary').action((options: WorkflowRouteOptions) => runWorkflowRoute(io, options));
+  addWorkflowRouteOptions(workflow.command('autonomous'), 'Plan an autonomous workflow handoff summary').action((options: WorkflowRouteOptions) => runAutonomousWorkflow(io, options));
+  addWorkflowRouteOptions(program.command('autonomous'), 'Plan an autonomous workflow handoff summary').action((options: WorkflowRouteOptions) => runAutonomousWorkflow(io, options));
 
   const swarm = program.command('swarm').description('Plan RD swarm dry-run graphs');
   addSwarmPlanOptions(swarm.command('plan'), true).action((options: SwarmPlanOptions) => runSwarmPlan(io, options));

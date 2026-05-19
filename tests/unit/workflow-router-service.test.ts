@@ -42,7 +42,7 @@ describe('createWorkflowRouterPlan', () => {
     expect(plan.steps.filter((step) => step.modelTier === 'mid-tier').map((step) => step.stage)).toEqual(['coding-execution', 'unit-test-execution']);
     expect(plan.steps.every((step) => step.dryRunOnly && !step.invokesAgents && !step.writesArtifacts)).toBe(true);
     expect(plan.steps.find((step) => step.stage === 'product-direction')?.reason).toContain('[full-auto] decision stage');
-    expect(plan.steps.find((step) => step.stage === 'coding-execution')?.reason).toContain('[autonomous] execution stage');
+    expect(plan.steps.find((step) => step.stage === 'coding-execution')?.reason).toContain('[routed] execution stage');
   });
 
   test('rejects invalid solo mode values at the service boundary', () => {
@@ -69,12 +69,12 @@ describe('createWorkflowRouterPlan', () => {
     expect(guidedPlan.soloMode).toBe('guided');
     expect(guidedPlan.executionMode).toBe('autonomous');
     expect(guidedPlan.steps.find((step) => step.stage === 'product-direction')?.reason).toContain('[guided] decision stage');
-    expect(guidedPlan.steps.find((step) => step.stage === 'tech-direction')?.reason).toContain('[autonomous] execution stage');
+    expect(guidedPlan.steps.find((step) => step.stage === 'tech-direction')?.reason).toContain('[routed] execution stage');
 
     expect(rndPlan.soloMode).toBe('rnd');
     expect(rndPlan.executionMode).toBe('autonomous');
     expect(rndPlan.steps.find((step) => step.stage === 'tech-direction')?.reason).toContain('[rnd] decision stage');
-    expect(rndPlan.steps.find((step) => step.stage === 'coding-execution')?.reason).toContain('[autonomous] execution stage');
+    expect(rndPlan.steps.find((step) => step.stage === 'coding-execution')?.reason).toContain('[routed] execution stage');
   });
 
   test('routes product design tech and review to strongest model while economy execution uses the configured provider model', () => {

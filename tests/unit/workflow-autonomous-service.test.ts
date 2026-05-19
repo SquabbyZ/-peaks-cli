@@ -81,6 +81,15 @@ describe('createAutonomousWorkflowPlan', () => {
     expect(plan.modelAssignments).toEqual(plan.routePlan.modelAssignments);
     expect(plan.modelAssignments.filter((assignment) => assignment.modelRole === 'execution').map((assignment) => assignment.modelId)).toEqual(['minimax-2.7', 'minimax-2.7']);
     expect(plan.modelAssignments.filter((assignment) => assignment.modelRole === 'strongest').every((assignment) => assignment.modelId === 'claude-opus-4-7')).toBe(true);
+    expect(plan.mvpPackage).toMatchObject({
+      mode: 'solo',
+      soloMode: 'guided',
+      executionMode: 'preview',
+      dryRun: true,
+      ready: false
+    });
+    expect(plan.mvpPackage.routePolicy).toBe(plan.routePlan.routePolicy);
+    expect(plan.mvpPackage.rdWaveNames).toEqual(plan.rdPlan.waves.map((wave) => wave.name));
   });
 
   test('models curated accessRepo and mcpServer capabilities without activation', () => {
@@ -91,13 +100,22 @@ describe('createAutonomousWorkflowPlan', () => {
       dryRun: true
     });
 
-    expect(plan.capabilityPlan.sources).toEqual(['docs/accessRepo.md', 'docs/mcpServer.md', 'skills/*/SKILL.md']);
-    expect(plan.capabilityPlan.candidates.map((candidate) => candidate.purpose)).toContain('frontend-browser-validation');
-    expect(plan.capabilityPlan.candidates.map((candidate) => candidate.purpose)).toContain('swarm-orchestration');
+    expect(plan.capabilityPlan.sources).toEqual(expect.arrayContaining(['docs/accessRepo.md', 'docs/mcpServer.md', 'skills/*/SKILL.md', 'context7', 'everything-claude-code']));
+    expect(plan.capabilityPlan.candidates.map((candidate) => candidate.purpose)).toContain('browser-validation');
+    expect(plan.capabilityPlan.candidates.map((candidate) => candidate.purpose)).toContain('browser-debug');
     expect(plan.capabilityPlan.candidates.map((candidate) => candidate.purpose)).toContain('docs-lookup');
+    expect(plan.capabilityPlan.candidates.map((candidate) => candidate.purpose)).toContain('skill-pack');
+    expect(plan.capabilityPlan.candidates.map((candidate) => candidate.purpose)).toContain('cloud-skill-pack');
     expect(plan.capabilityPlan.candidates.filter((candidate) => candidate.trustLevel === 'user-curated').every((candidate) => candidate.activation === 'not-active')).toBe(true);
     expect(plan.capabilityPlan.candidates.find((candidate) => candidate.id === 'local-peaks-skills')?.activation).toBe('available');
     expect(plan.capabilityPlan.policy).toContain('reuse-curated-capabilities-before-custom-build');
+    expect(plan.capabilityPlan.surfaces).toEqual(['skill', 'mcp', 'plugin', 'expert']);
+    expect(plan.capabilityPlan.surfaceSummary).toEqual(plan.mvpPackage.capabilityCountBySurface);
+    expect(plan.mvpPackage.capabilitySurfaces).toEqual(['skill', 'mcp', 'plugin', 'expert']);
+    expect(plan.mvpPackage.capabilityCountBySurface.skill).toBeGreaterThan(0);
+    expect(plan.mvpPackage.capabilityCountBySurface.mcp).toBeGreaterThan(0);
+    expect(plan.mvpPackage.capabilityCountBySurface.plugin).toBeGreaterThan(0);
+    expect(plan.mvpPackage.capabilityCountBySurface.expert).toBeGreaterThan(0);
   });
 
   test('returns preview-safe next actions when artifact workspace is unavailable', () => {

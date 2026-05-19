@@ -3,20 +3,46 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { buildArtifactRelativePath, validateChangeIdOrThrow } from '../../shared/change-id.js';
 import { WORKSPACE_UNAVAILABLE_NEXT_ACTIONS } from '../../shared/planner-response.js';
 import { getLocalArtifactPath, hasValidArtifactWorkspace } from '../artifacts/workspace-service.js';
+import { createCapabilityMapPlan } from '../recommendations/capability-map-service.js';
+import type { CapabilityAvailabilityStatus, CapabilityItemType } from '../recommendations/recommendation-types.js';
 import type { ModelProviderConfig, WorkspaceConfig } from '../config/config-types.js';
 import { createRdSwarmPlan, type RdPlanResult } from '../rd/rd-service.js';
 import { createWorkflowRouterPlan, type SoloMode, type WorkflowMode, type WorkflowRouterPlan } from './workflow-router-service.js';
 
+export type CapabilitySurface = 'skill' | 'mcp' | 'plugin' | 'expert';
 export type CapabilityPurpose =
-  | 'code-standards'
-  | 'project-scanning'
-  | 'frontend-browser-validation'
-  | 'minimax-execution-skills'
-  | 'cross-session-memory'
-  | 'ui-design'
+  | 'code-review'
+  | 'security-review'
+  | 'coding-standards'
+  | 'docs-lookup'
+  | 'browser-validation'
+  | 'browser-debug'
+  | 'design-context'
+  | 'design-source'
+  | 'code-search'
+  | 'database-inspection'
+  | 'browser-agent'
+  | 'worker-guidance'
+  | 'memory'
+  | 'context-management'
+  | 'ui-components'
+  | 'spec-workflow'
+  | 'repo-intelligence'
   | 'openspec'
-  | 'swarm-orchestration'
-  | 'docs-lookup';
+  | 'workflow-methodology'
+  | 'workflow-reference'
+  | 'workflow-guidance'
+  | 'product-guidance'
+  | 'design-reference'
+  | 'ui-reference'
+  | 'engineering-guidance'
+  | 'typescript-guidance'
+  | 'quality-guidance'
+  | 'skill-pack'
+  | 'external-skill'
+  | 'design-critique'
+  | 'design-guidance'
+  | 'cloud-skill-pack';
 
 export type CapabilityActivation = 'available' | 'needs-install' | 'needs-credentials' | 'not-active';
 export type CapabilityTrustLevel = 'local' | 'user-curated' | 'third-party';
@@ -25,6 +51,9 @@ export type CapabilityCandidate = {
   readonly id: string;
   readonly source: string;
   readonly purpose: CapabilityPurpose;
+  readonly surface: CapabilitySurface;
+  readonly kind: CapabilitySurface;
+  readonly sourceType: CapabilityItemType;
   readonly trustLevel: CapabilityTrustLevel;
   readonly activation: CapabilityActivation;
   readonly risk: readonly string[];
@@ -61,6 +90,8 @@ export type AutonomousCapabilityPlan = {
   readonly sources: readonly string[];
   readonly policy: readonly string[];
   readonly candidates: readonly CapabilityCandidate[];
+  readonly surfaces: readonly CapabilitySurface[];
+  readonly surfaceSummary: Record<CapabilitySurface, number>;
 };
 
 export type AutonomousResumePlan = {
@@ -82,6 +113,18 @@ export type AutonomousStoragePlan = {
   readonly memoryBackupPath: string | null;
 };
 
+export type AutonomousMvpPackage = {
+  readonly mode: WorkflowMode;
+  readonly soloMode: SoloMode | undefined;
+  readonly executionMode: 'preview';
+  readonly dryRun: true;
+  readonly routePolicy: WorkflowRouterPlan['routePolicy'];
+  readonly rdWaveNames: readonly string[];
+  readonly capabilitySurfaces: readonly CapabilitySurface[];
+  readonly capabilityCountBySurface: Record<CapabilitySurface, number>;
+  readonly ready: boolean;
+};
+
 export type AutonomousWorkflowPlan = {
   readonly available: boolean;
   readonly behavior: 'preview' | 'ready';
@@ -97,6 +140,7 @@ export type AutonomousWorkflowPlan = {
   readonly modelAssignments: WorkflowRouterPlan['modelAssignments'];
   readonly rdPlan: RdPlanResult;
   readonly resumePlan: AutonomousResumePlan;
+  readonly mvpPackage: AutonomousMvpPackage;
   readonly constraints: readonly string[];
   readonly blockedReasons: readonly string[];
   readonly nextActions: readonly string[];
@@ -168,27 +212,157 @@ function createGoalPackage(changeId: string, goal: string): AutonomousGoalPackag
   };
 }
 
-function createCapabilityPlan(): AutonomousCapabilityPlan {
+const CAPABILITY_SURFACES: readonly CapabilitySurface[] = ['skill', 'mcp', 'plugin', 'expert'];
+
+function createCapabilitySurfaceSummary(): Record<CapabilitySurface, number> {
   return {
-    sources: ['docs/accessRepo.md', 'docs/mcpServer.md', 'skills/*/SKILL.md'],
+    skill: 0,
+    mcp: 0,
+    plugin: 0,
+    expert: 0
+  };
+}
+
+function getCapabilitySurface(itemType: CapabilityItemType): CapabilitySurface {
+  if (itemType === 'skill') return 'skill';
+  if (itemType === 'mcp') return 'mcp';
+  if (itemType === 'agent') return 'expert';
+  return 'plugin';
+}
+
+function getCapabilityTrustLevel(sourceId: string): CapabilityTrustLevel {
+  if (sourceId === 'skills/*/SKILL.md' || sourceId === 'local-peaks-skills') {
+    return 'local';
+  }
+
+  if (
+    sourceId.startsWith('everything-claude-code')
+    || sourceId.startsWith('ruflo-')
+    || sourceId === 'superpowers'
+    || sourceId === 'openspec'
+    || sourceId === 'gstack'
+    || sourceId === 'impeccable'
+    || sourceId === 'andrej-karpathy-skills'
+    || sourceId === 'mattpocock-skills'
+  ) {
+    return 'user-curated';
+  }
+
+  return 'third-party';
+}
+
+function getCapabilityPurpose(item: { category: string; itemType: CapabilityItemType }): CapabilityPurpose {
+  switch (item.category) {
+    case 'browser-validation':
+    case 'browser-debug':
+    case 'design-context':
+    case 'code-search':
+    case 'database-inspection':
+    case 'browser-agent':
+    case 'docs-lookup':
+    case 'design-source':
+    case 'code-review':
+    case 'security-review':
+    case 'coding-standards':
+    case 'worker-guidance':
+    case 'memory':
+    case 'context-management':
+    case 'ui-components':
+    case 'spec-workflow':
+    case 'repo-intelligence':
+    case 'openspec':
+    case 'workflow-methodology':
+    case 'workflow-reference':
+    case 'workflow-guidance':
+    case 'product-guidance':
+    case 'design-reference':
+    case 'ui-reference':
+    case 'engineering-guidance':
+    case 'typescript-guidance':
+    case 'quality-guidance':
+    case 'skill-pack':
+    case 'external-skill':
+    case 'design-critique':
+    case 'design-guidance':
+    case 'cloud-skill-pack':
+      return item.category;
+    default:
+      return item.itemType === 'mcp' ? 'docs-lookup' : 'workflow-guidance';
+  }
+}
+
+function getCapabilityActivation(status: CapabilityAvailabilityStatus, itemType: CapabilityItemType): CapabilityActivation {
+  switch (status) {
+    case 'available':
+      return 'available';
+    case 'installable':
+      return itemType === 'mcp' ? 'needs-credentials' : 'needs-install';
+    case 'disabled':
+      return 'not-active';
+    case 'unknown':
+    default:
+      return itemType === 'mcp' ? 'needs-credentials' : 'not-active';
+  }
+}
+
+function createCapabilityPlan(request: AutonomousWorkflowRequest): AutonomousCapabilityPlan {
+  const catalogPlan = createCapabilityMapPlan({ installedCapabilityIds: request.workspace?.installedCapabilityIds ?? [] });
+  const surfaceSummary = createCapabilitySurfaceSummary();
+  const candidates: CapabilityCandidate[] = catalogPlan.items.map((item) => {
+    const surface = getCapabilitySurface(item.itemType);
+    const availability = catalogPlan.availability.find((availability) => availability.capabilityId === item.capabilityId);
+
+    surfaceSummary[surface] += 1;
+    return {
+      id: item.capabilityId,
+      source: item.sourceId,
+      purpose: getCapabilityPurpose(item),
+      surface,
+      kind: surface,
+      sourceType: item.itemType,
+      trustLevel: getCapabilityTrustLevel(item.sourceId),
+      activation: getCapabilityActivation(availability?.status ?? 'unknown', item.itemType),
+      risk: [item.riskLevel] as const
+    };
+  });
+
+  candidates.push({
+    id: 'local-peaks-skills',
+    source: 'skills/*/SKILL.md',
+    purpose: 'workflow-methodology',
+    surface: 'skill',
+    kind: 'skill',
+    sourceType: 'skill',
+    trustLevel: 'local',
+    activation: 'available',
+    risk: ['local-skill-boundary-misuse'] as const
+  });
+  surfaceSummary.skill += 1;
+
+  return {
+    sources: uniqueStrings(['docs/accessRepo.md', 'docs/mcpServer.md', 'skills/*/SKILL.md', ...catalogPlan.sources.map((source) => source.sourceId)]),
     policy: [
       'reuse-curated-capabilities-before-custom-build',
       'plan-capability-use-before-activation',
       'require-explicit-approval-for-install-credentials-network-or-settings-mutation'
     ],
-    candidates: [
-      { id: 'accessrepo-code-standards', source: 'docs/accessRepo.md', purpose: 'code-standards', trustLevel: 'user-curated', activation: 'not-active', risk: ['third-party-source', 'network-access-if-fetched'] },
-      { id: 'accessrepo-project-scanning', source: 'docs/accessRepo.md', purpose: 'project-scanning', trustLevel: 'user-curated', activation: 'not-active', risk: ['third-party-source', 'network-access-if-fetched'] },
-      { id: 'accessrepo-frontend-browser', source: 'docs/accessRepo.md', purpose: 'frontend-browser-validation', trustLevel: 'user-curated', activation: 'not-active', risk: ['browser-automation', 'network-access-if-fetched'] },
-      { id: 'accessrepo-minimax-skills', source: 'docs/accessRepo.md', purpose: 'minimax-execution-skills', trustLevel: 'user-curated', activation: 'not-active', risk: ['model-provider-specific', 'network-access-if-fetched'] },
-      { id: 'accessrepo-cross-session-memory', source: 'docs/accessRepo.md', purpose: 'cross-session-memory', trustLevel: 'user-curated', activation: 'not-active', risk: ['state-persistence', 'network-access-if-fetched'] },
-      { id: 'accessrepo-ui-design', source: 'docs/accessRepo.md', purpose: 'ui-design', trustLevel: 'user-curated', activation: 'not-active', risk: ['third-party-source', 'design-dependency-drift'] },
-      { id: 'accessrepo-openspec', source: 'docs/accessRepo.md', purpose: 'openspec', trustLevel: 'user-curated', activation: 'not-active', risk: ['process-coupling'] },
-      { id: 'accessrepo-swarm-orchestration', source: 'docs/accessRepo.md', purpose: 'swarm-orchestration', trustLevel: 'user-curated', activation: 'not-active', risk: ['coordination-overhead', 'network-access-if-fetched'] },
-      { id: 'mcp-context7', source: 'docs/mcpServer.md', purpose: 'docs-lookup', trustLevel: 'user-curated', activation: 'not-active', risk: ['network-access', 'external-doc-content'] },
-      { id: 'mcp-playwright-browser', source: 'docs/mcpServer.md', purpose: 'frontend-browser-validation', trustLevel: 'user-curated', activation: 'not-active', risk: ['browser-automation', 'network-access'] },
-      { id: 'local-peaks-skills', source: 'skills/*/SKILL.md', purpose: 'swarm-orchestration', trustLevel: 'local', activation: 'available', risk: ['local-skill-boundary-misuse'] }
-    ]
+    candidates,
+    surfaces: [...CAPABILITY_SURFACES],
+    surfaceSummary
+  };
+}
+
+function createMvpPackage(request: AutonomousWorkflowRequest, routePlan: WorkflowRouterPlan, rdPlan: RdPlanResult, capabilityPlan: AutonomousCapabilityPlan, ready: boolean): AutonomousMvpPackage {
+  return {
+    mode: request.mode,
+    soloMode: routePlan.soloMode,
+    executionMode: 'preview',
+    dryRun: true,
+    routePolicy: routePlan.routePolicy,
+    rdWaveNames: rdPlan.waves.map((wave) => wave.name),
+    capabilitySurfaces: [...capabilityPlan.surfaces],
+    capabilityCountBySurface: { ...capabilityPlan.surfaceSummary },
+    ready
   };
 }
 
@@ -512,6 +686,8 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     ...(resumeArtifactsStatus === 'invalid' ? ['resume-artifacts-invalid'] : [])
   ]);
   const ready = available && blockedReasons.length === 0;
+  const capabilityPlan = createCapabilityPlan(request);
+  const mvpPackage = createMvpPackage(request, routePlan, rdPlan, capabilityPlan, ready);
 
   return {
     available: ready,
@@ -522,7 +698,7 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     dryRun: true,
     goalPackage,
     goalCommand: createGoalCommand(goalPackage),
-    capabilityPlan: createCapabilityPlan(),
+    capabilityPlan,
     storagePlan: {
       scope: 'user-local',
       artifactWorkspacePath: artifactWorkspacePath ?? null,
@@ -532,6 +708,7 @@ export function createAutonomousWorkflowPlan(request: AutonomousWorkflowRequest)
     modelAssignments: routePlan.modelAssignments,
     rdPlan,
     resumePlan: createResumePlan(request.changeId, ready),
+    mvpPackage,
     constraints: [...AUTONOMOUS_CONSTRAINTS],
     blockedReasons,
     nextActions: available

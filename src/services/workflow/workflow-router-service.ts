@@ -147,18 +147,18 @@ export function isSoloMode(value: string): value is SoloMode {
 
 function getDecisionProfileSummary(mode: WorkflowMode, soloMode: SoloMode | undefined): string {
   if (mode === 'team') {
-    return 'Team mode keeps product and design governance on a human-controlled path while the RD execution pipeline follows recommended defaults and stays autonomous.';
+    return 'Team mode keeps product and design governance on a human-controlled path while RD execution follows recommended defaults.';
   }
 
   if (soloMode === 'guided') {
-    return 'Guided mode keeps the user in the decision loop for the early recommended defaults, while later execution remains fully autonomous.';
+    return 'Guided mode keeps the user in the decision loop for the early recommended defaults, while later execution remains bounded by the routing plan.';
   }
 
   if (soloMode === 'rnd') {
-    return 'R&D mode asks for technical confirmation up front, then applies recommended defaults for implementation, testing, review, and safety checks autonomously.';
+    return 'R&D mode asks for technical confirmation up front, then applies recommended defaults for implementation, testing, review, and safety checks.';
   }
 
-  return 'Full-auto mode applies recommended defaults for product, design, and tech decisions, then runs the engineering pipeline end to end without further prompts.';
+  return 'Full-auto mode applies recommended defaults for product, design, and tech decisions, then runs the engineering pipeline end to end under routing gates.';
 }
 
 function annotateSteps(steps: WorkflowRouterStep[], soloMode: SoloMode): WorkflowRouterStep[] {
@@ -169,7 +169,7 @@ function annotateSteps(steps: WorkflowRouterStep[], soloMode: SoloMode): Workflo
     const isDecisionStage = decisionStages.includes(currentStep.stage);
     const reasonPrefix = isDecisionStage
       ? `[${soloMode}] decision stage`
-      : '[autonomous] execution stage';
+      : '[routed] execution stage';
     return {
       ...currentStep,
       reason: `${reasonPrefix}: ${currentStep.reason}`
