@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
@@ -202,35 +202,35 @@ describe('createProgram', () => {
     expect(output.data.executionMode).toBe('autonomous');
   });
 
-  test('bootstraps project language config from workflow goal language on first use', async () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-language-bootstrap-'));
+  test('does not write project language config from workflow route planning', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-language-plan-'));
     writeFileSync(join(projectRoot, 'package.json'), '{}', 'utf8');
     const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
 
     try {
-      const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'language-bootstrap', '--goal', '请使用 peaks-solo 帮我重构这个项目', '--json']);
+      const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'language-plan', '--goal', '请使用 peaks-solo 帮我重构这个项目', '--json']);
       const output = parseJsonOutput(result.stdout);
 
       expect(output.ok).toBe(true);
-      expect(JSON.parse(readFileSync(join(projectRoot, '.peaks', 'config.json'), 'utf8'))).toEqual({ language: 'zh-CN' });
+      expect(existsSync(join(projectRoot, '.peaks', 'config.json'))).toBe(false);
     } finally {
       cwdSpy.mockRestore();
     }
   });
 
-  test('bootstraps project language at the project root when run from a nested directory', async () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-language-bootstrap-root-'));
+  test('does not write project language config from nested workflow route planning', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'peaks-cli-language-plan-root-'));
     const nestedDir = join(projectRoot, 'packages', 'app');
     mkdirSync(nestedDir, { recursive: true });
     writeFileSync(join(projectRoot, 'package.json'), '{}', 'utf8');
     const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(nestedDir);
 
     try {
-      const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'nested-language-bootstrap', '--goal', '请使用 peaks-solo 帮我重构这个项目', '--json']);
+      const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'nested-language-plan', '--goal', '请使用 peaks-solo 帮我重构这个项目', '--json']);
       const output = parseJsonOutput(result.stdout);
 
       expect(output.ok).toBe(true);
-      expect(JSON.parse(readFileSync(join(projectRoot, '.peaks', 'config.json'), 'utf8'))).toEqual({ language: 'zh-CN' });
+      expect(existsSync(join(projectRoot, '.peaks', 'config.json'))).toBe(false);
       expect(existsSync(join(nestedDir, '.peaks', 'config.json'))).toBe(false);
     } finally {
       cwdSpy.mockRestore();
@@ -251,6 +251,15 @@ describe('createProgram', () => {
     } finally {
       cwdSpy.mockRestore();
     }
+  });
+
+  test('rejects workflow planning with an empty goal', async () => {
+    const result = await runCommand(['workflow', 'route', '--mode', 'solo', '--change-id', 'empty-goal', '--goal', '   ', '--json']);
+    const output = parseJsonOutput(result.stdout);
+
+    expect(output.ok).toBe(false);
+    expect(output.code).toBe('INVALID_CHANGE_ID_OR_GOAL');
+    expect(result.exitCode).toBe(1);
   });
 
   test('prints workflow route dry run for team mode', async () => {

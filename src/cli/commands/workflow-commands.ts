@@ -5,7 +5,7 @@ import { createWorkflowRouterPlan, isSoloMode, isWorkflowMode, type SoloMode } f
 import { createAutonomousWorkflowPlan } from '../../services/workflow/workflow-autonomous-service.js';
 import { createRecommendationPlan } from '../../services/recommendations/recommendation-service.js';
 import { createRefactorDryRun, type RefactorMode } from '../../services/refactor/refactor-service.js';
-import { bootstrapProjectLanguageConfig, getCurrentWorkspaceConfig, readConfig, resolveProjectRootForConfig } from '../../services/config/config-service.js';
+import { getCurrentWorkspaceConfig, readConfig } from '../../services/config/config-service.js';
 import type { WorkspaceConfig } from '../../services/config/config-types.js';
 import { validateChangeIdOrThrow } from '../../shared/change-id.js';
 import { getEconomyAwareExecutionModelId } from '../../services/config/model-routing.js';
@@ -66,9 +66,11 @@ function parseMaxWorkers(io: ProgramIO, command: string, value: string, asJson?:
   return maxWorkers;
 }
 
-function bootstrapGoalLanguage(changeId: string, goal: string): void {
+function validatePlanningInput(changeId: string, goal: string): void {
   validateChangeIdOrThrow(changeId);
-  bootstrapProjectLanguageConfig(resolveProjectRootForConfig(process.cwd()), goal);
+  if (!goal.trim()) {
+    throw new Error('Goal must be non-empty');
+  }
 }
 
 function parseSoloMode(io: ProgramIO, command: string, mode: string, soloMode: string | undefined, asJson?: boolean): SoloMode | undefined | null {
@@ -97,7 +99,7 @@ function runTechPlan(io: ProgramIO, options: TechPlanOptions): void {
   }
 
   try {
-    bootstrapGoalLanguage(options.changeId, options.goal);
+    validatePlanningInput(options.changeId, options.goal);
     const workspaceContext = getWorkspaceContext();
     const plan = createTechPlan({
       changeId: options.changeId,
@@ -142,7 +144,7 @@ function runWorkflowRoute(io: ProgramIO, options: WorkflowRouteOptions): void {
   if (soloMode === null) return;
 
   try {
-    bootstrapGoalLanguage(options.changeId, options.goal);
+    validatePlanningInput(options.changeId, options.goal);
     const workspaceContext = getWorkspaceContext();
     const plan = createWorkflowRouterPlan({
       changeId: options.changeId,
@@ -180,7 +182,7 @@ function runAutonomousWorkflow(io: ProgramIO, options: WorkflowRouteOptions): vo
   if (soloMode === null) return;
 
   try {
-    bootstrapGoalLanguage(options.changeId, options.goal);
+    validatePlanningInput(options.changeId, options.goal);
     const workspaceContext = getWorkspaceContext();
     const plan = createAutonomousWorkflowPlan({
       changeId: options.changeId,
@@ -215,7 +217,7 @@ function runSwarmPlan(io: ProgramIO, options: SwarmPlanOptions): void {
   if (maxWorkers === null) return;
 
   try {
-    bootstrapGoalLanguage(options.changeId, options.goal);
+    validatePlanningInput(options.changeId, options.goal);
     const workspaceContext = getWorkspaceContext();
     const config = readConfig();
     const plan = createRdSwarmPlan({
