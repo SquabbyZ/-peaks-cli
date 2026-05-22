@@ -17,18 +17,29 @@ vi.mock('../../src/services/config/config-service.js', () => ({
   readConfig: () => ({ workspaces: currentWorkspace ? [currentWorkspace] : [] })
 }));
 
+function resolveArtifactRepo(workspace: WorkspaceConfig | null): WorkspaceConfig['artifactRepo'] | null {
+  if (!workspace) return null;
+  if (workspace.artifactStorage?.mode === 'local-with-remote-sync') return workspace.artifactStorage.remote;
+  if (workspace.artifactStorage?.mode === 'local') return null;
+  return workspace.artifactRepo ?? null;
+}
+
 vi.mock('../../src/services/artifacts/workspace-service.js', () => ({
+  getArtifactRemoteRepo: (workspace: WorkspaceConfig) => resolveArtifactRepo(workspace),
   getLocalArtifactPath: (workspace: WorkspaceConfig) => join(dirname(workspace.rootPath), `${basename(workspace.rootPath)}.peaks-artifacts`),
-  getArtifactWorkspaceStatus: () => ({
-    workspaceId: currentWorkspace?.workspaceId ?? 'unknown',
-    localPath: currentWorkspace ? join(dirname(currentWorkspace.rootPath), `${basename(currentWorkspace.rootPath)}.peaks-artifacts`) : '.peaks-artifacts',
-    configured: Boolean(currentWorkspace?.artifactRepo),
-    syncStatus: artifactSyncStatus,
-    lastSync: null,
-    hasLocalChanges: false,
-    artifactRepo: currentWorkspace?.artifactRepo ?? null,
-    nextActions: []
-  })
+  getArtifactWorkspaceStatus: () => {
+    const artifactRepo = resolveArtifactRepo(currentWorkspace);
+    return {
+      workspaceId: currentWorkspace?.workspaceId ?? 'unknown',
+      localPath: currentWorkspace ? join(dirname(currentWorkspace.rootPath), `${basename(currentWorkspace.rootPath)}.peaks-artifacts`) : '.peaks-artifacts',
+      configured: Boolean(currentWorkspace),
+      syncStatus: artifactSyncStatus,
+      lastSync: null,
+      hasLocalChanges: false,
+      artifactRepo,
+      nextActions: []
+    };
+  }
 }));
 
 vi.mock('node:child_process', () => ({
@@ -68,6 +79,13 @@ function createWorkspace(provider?: WorkspaceConfig['artifactRepo']): WorkspaceC
 
 function createWorkspaceWithRepo(provider: WorkspaceConfig['artifactRepo'] = { provider: 'github', owner: 'acme', name: 'artifact-repo' }): WorkspaceConfig {
   return createWorkspace(provider);
+}
+
+function createWorkspaceWithArtifactStorage(artifactStorage: NonNullable<WorkspaceConfig['artifactStorage']>, legacyRepo?: WorkspaceConfig['artifactRepo']): WorkspaceConfig {
+  return {
+    ...createWorkspace(legacyRepo),
+    artifactStorage
+  };
 }
 
 function prepareChangeDir(workspace: WorkspaceConfig, changeId: string): string {
@@ -204,13 +222,25 @@ describe('peaks-sc service', () => {
     expect(getChangeTraceabilityStatus().changeId).toBeNull();
   });
 
-  test('reports missing artifact repo configuration', () => {
-    currentWorkspace = createWorkspace(undefined);
+  test('reports local-only artifact storage without requiring artifact repo configuration', () => {
+    currentWorkspace = createWorkspaceWithArtifactStorage({ mode: 'local' });
 
     const status = getChangeTraceabilityStatus();
 
     expect(status.hasArtifactRepo).toBe(false);
-    expect(status.nextActions).toContain('Configure artifact repo: peaks config workspace add --id <id> --provider github --repo-owner <owner> --repo-name <name>');
+    expect(status.nextActions).not.toContain('Configure artifact repo: peaks config workspace add --id <id> --provider github --repo-owner <owner> --repo-name <name>');
+    expect(status.nextActions[0]).toBe('Set the current change in .peaks/current-change');
+  });
+
+  test('uses artifactStorage remote sync for traceability without legacy artifactRepo', () => {
+    currentWorkspace = createWorkspaceWithArtifactStorage({ mode: 'local-with-remote-sync', remote: { provider: 'gitlab', owner: 'acme', name: 'storage-artifacts' } });
+
+    const status = getChangeTraceabilityStatus();
+    const impact = createChangeImpact({ changeId: 'change-remote-storage' });
+
+    expect(status.hasArtifactRepo).toBe(true);
+    expect(status.nextActions[0]).toBe('Set the current change in .peaks/current-change');
+    expect(impact.syncPointers.artifactRepo).toBe('https://gitlab.com/acme/storage-artifacts.git');
   });
 
   test('validates artifact retention by checking the requested slice directory', () => {

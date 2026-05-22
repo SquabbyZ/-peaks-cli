@@ -2,7 +2,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, relative, resolve } from 'node:path';
 import { getCurrentWorkspaceConfig } from '../config/config-service.js';
-import { getArtifactWorkspaceStatus, getLocalArtifactPath } from '../artifacts/workspace-service.js';
+import { getArtifactRemoteRepo, getArtifactWorkspaceStatus, getLocalArtifactPath } from '../artifacts/workspace-service.js';
 
 export type ChangeImpact = {
   changeId: string;
@@ -163,7 +163,8 @@ export function getChangeTraceabilityStatus(): ChangeTraceabilityStatus {
   }
 
   const { peaksPath, changeId, changeDir } = getCurrentArtifactDir(workspace.rootPath);
-  const hasArtifactRepo = Boolean(workspace.artifactRepo);
+  const artifactRepo = getArtifactRemoteRepo(workspace);
+  const hasArtifactRepo = Boolean(artifactRepo);
   const requiredArtifacts = REQUIRED_ARTIFACTS.map((artifact) => {
     const artifactPath = resolve(changeDir, ...artifact.path);
     return {
@@ -177,10 +178,7 @@ export function getChangeTraceabilityStatus(): ChangeTraceabilityStatus {
   if (!changeId) {
     nextActions.push('Set the current change in .peaks/current-change');
   }
-  if (!hasArtifactRepo) {
-    nextActions.push('Configure artifact repo: peaks config workspace add --id <id> --provider github --repo-owner <owner> --repo-name <name>');
-    nextActions.push('Then run: peaks artifacts init --provider github --name <repo> --dry-run');
-  } else if (artifactStatus.syncStatus === 'pending') {
+  if (hasArtifactRepo && artifactStatus.syncStatus === 'pending') {
     nextActions.push(`Run peaks artifacts sync --workspace ${workspace.workspaceId} --dry-run`);
   }
 
@@ -201,7 +199,7 @@ export function createChangeImpact(options: {
   affectedFiles?: string[];
 }): ChangeImpact {
   const workspace = getCurrentWorkspaceConfig();
-  const artifactRepo = workspace?.artifactRepo ?? null;
+  const artifactRepo = workspace ? getArtifactRemoteRepo(workspace) : null;
 
   return {
     changeId: options.changeId,
